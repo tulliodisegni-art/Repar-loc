@@ -258,7 +258,7 @@ function saveDemo(){ if (!lsSet(DEMO_KEY, JSON.stringify(DEMO))) storageOk = fal
 const RL = window.RL_CFG || null; // {url, key, link} défini par la version installée
 const APP_LINK = (RL && RL.link) || 'https://tulliodisegni-art.github.io/Repar-loc/';
 const SH = {status:'idle', sb:null, uid:null, email:'', me:null, members:{}, logements:[], pros:[], dossiers:[], notifs:[], msgIds:new Set(), err:'', timer:null, info:''};
-function resetShared(){ Object.assign(SH, {uid:null, email:'', me:null, members:{}, logements:[], pros:[], dossiers:[], notifs:[], msgIds:new Set()}); }
+function resetShared(){ Object.assign(SH, {admin:false, adm:null, uid:null, email:'', me:null, members:{}, logements:[], pros:[], dossiers:[], notifs:[], msgIds:new Set()}); }
 async function q(p){ const r = await p; if (r.error) throw r.error; return r.data; }
 function sbErr(e){
   const m = String((e && (e.message || e.error_description)) || e || '');
@@ -287,6 +287,7 @@ async function initShared(){
 function isTyping(){ const a = document.activeElement; return !!(a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT') && a.value); }
 async function afterLogin(user){
   SH.uid = user.id; SH.email = user.email || '';
+  try { const r = await SH.sb.rpc('rl_is_admin'); SH.admin = !r.error && r.data === true; } catch(e){ SH.admin = false; }
   await reloadShared();
   if (!SH.timer) SH.timer = setInterval(() => {
     if (isShared() && document.visibilityState === 'visible' && SH.status === 'ready' && !$('#modal-form') && !isTyping()) reloadShared().catch(() => {});
@@ -737,7 +738,7 @@ function render(){
   if (!PREFS.welcomed && ui.view === 'home') main = viewWelcome();
   else if (isShared() && (SH.status !== 'ready' || !SH.me)) main = viewSharedGate();
   else {
-    const V = {home:viewHome, dossiers:viewList, dossier:viewDetail, rdv:viewRdv, logements:viewLogements, signaler:viewReport, notifs:viewNotifs, menu:viewMenu, guide:viewGuide}[ui.view] || viewHome;
+    const V = {home:viewHome, dossiers:viewList, dossier:viewDetail, rdv:viewRdv, logements:viewLogements, signaler:viewReport, notifs:viewNotifs, menu:viewMenu, guide:viewGuide, admin:viewAdmin}[ui.view] || viewHome;
     main = V();
   }
   const sharedReady = !isShared() || (SH.status === 'ready' && SH.me);
@@ -765,7 +766,7 @@ function nav(){
   else if (m.role === 'tenant') items.push(['signaler','plus','Signaler']);
   else items.push(['notifs','bell','Alertes']);
   items.push(['menu','menu','Menu']);
-  const cur = ui.view === 'dossier' ? 'dossiers' : (ui.view === 'guide' ? 'menu' : ui.view);
+  const cur = ui.view === 'dossier' ? 'dossiers' : (['guide','admin'].includes(ui.view) ? 'menu' : ui.view);
   return `<nav class="nav" aria-label="Navigation principale"><div class="nav-in">${items.map(([v, i, l]) => `<button data-act="go" data-view="${v}" ${cur === v ? 'aria-current="page"' : ''}>${ico(i)}<span>${l}</span>${v === 'home' && n ? `<span class="dot">${n}</span>` : ''}${v === 'notifs' && n ? `<span class="dot">${n}</span>` : ''}</button>`).join('')}</div></nav>`;
 }
 function navMin(){ return `<nav class="nav"><div class="nav-in" style="grid-template-columns:1fr 1fr"><button data-act="mode" data-mode="demo">${ico('home')}<span>Revenir à la démo</span></button><button data-act="go" data-view="guide">${ico('menu')}<span>Guide</span></button></div></nav>`; }
@@ -996,15 +997,80 @@ function viewMenu(){
     s += `<h2>Données de démonstration</h2><div class="btns"><button class="btn block" data-act="reset" data-kind="examples">Recharger les exemples</button><button class="btn block danger" data-act="reset" data-kind="empty">Repartir d'une démo vide</button></div>
     <p class="muted small">Sauvegarde dans ce navigateur uniquement${storageOk ? '' : ' (indisponible ici)'} : elle peut être effacée par le téléphone et n'est pas une sauvegarde durable.</p>`;
   } else {
+    if (SH.admin) s += `<h2>Administrateur</h2><div class="btns"><button class="btn primary block" data-act="go" data-view="admin">Administration de l'appli</button></div>`;
     s += `<h2>Mon compte</h2><div class="card"><p><b>${esc(SH.me ? SH.me.name : '')}</b> · ${esc(SH.me ? ROLE_TITLE[SH.me.role] : '')}</p><p class="muted small">${esc(SH.email)}</p></div>
     <div class="btns">${SH.me && SH.me.role !== 'owner' ? '<button class="btn block" data-act="want-code">Saisir un nouveau code d’invitation</button>' : ''}<button class="btn ghost block" data-act="logout">Se déconnecter</button></div>`;
   }
   s += `<h2>Ce qui est réel et ce qui est simulé</h2>${limitsHtml()}`;
   return s;
 }
+/* ---------- Administration (compte administrateur seulement, vérifié par le serveur) ---------- */
+async function loadAdmin(){
+  SH.admLoading = true;
+  try { const r = await SH.sb.rpc('rl_admin_overview'); if (r.error) throw r.error; SH.adm = r.data; SH.admErr = ''; }
+  catch(e){ SH.admErr = /non_autorise/.test(String(e && e.message)) ? "Ce compte n'est pas administrateur." : sbErr(e); }
+  SH.admLoading = false; if (ui.view === 'admin') render();
+}
+function viewAdmin(){
+  const back = `<button class="back" data-act="go" data-view="menu">← Retour</button>`;
+  if (!isShared() || !SH.admin) return `${back}<h1>Administration</h1><p>Réservé au compte administrateur.</p>`;
+  if (!SH.adm){ if (!SH.admLoading) loadAdmin(); return `${back}<h1>Administration</h1>${SH.admErr ? `<div class="banner err">${esc(SH.admErr)}</div><button class="btn block" data-act="adm-reload">Réessayer</button>` : '<p class="muted">Chargement…</p>'}`; }
+  const A = SH.adm, prof = A.profiles || [], logs = A.logements || [], pros = A.pros || [], dos = A.dossiers || [], msgs = A.messages || [];
+  const who = id => { const p = prof.find(x => x.user_id === id); return p ? `${p.name} (${p.email || '?'})` : 'compte inconnu'; };
+  const logName = id => { const l = logs.find(x => x.id === id); return l ? `${l.name} · ${l.city || ''}` : 'logement supprimé'; };
+  const proN = id => { const x = pros.find(y => y.id === id); return x ? `${x.name} · ${x.trade || ''}` : ''; };
+  const open = dos.filter(d => d.data && !['CLOTURE','CLASSE'].includes(d.data.status)).length;
+  const cnt = r => prof.filter(p => p.role === r).length;
+  const stat = (n, l) => `<div class="card" style="text-align:center;margin:0"><div style="font-size:1.5rem;font-weight:700">${n}</div><div class="muted small">${l}</div></div>`;
+  const q = (ui.admQ || '').toLowerCase();
+  const hit = (...xs) => !q || xs.join(' ').toLowerCase().includes(q);
+  let s = `${back}<h1>Administration</h1>
+  <p class="muted small">Vue d'ensemble de tous les comptes et dossiers. Visible seulement par votre compte, ce que vérifie le serveur. Les autres utilisateurs ne voient pas cet écran.</p>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0">${stat(cnt('owner'), 'proprios')}${stat(cnt('tenant'), 'locataires')}${stat(cnt('pro'), 'pros')}${stat(logs.length, 'logements')}${stat(dos.length, 'dossiers')}${stat(open, 'en cours')}</div>
+  <div class="btns"><button class="btn ghost block" data-act="adm-reload">Actualiser</button></div>
+  <label class="lab" for="f-admq">Rechercher (nom, e-mail, ville, titre)</label><input type="text" id="f-admq" data-adm-q value="${esc(ui.admQ || '')}" placeholder="ex. Vincennes" autocomplete="off">`;
+  const P = prof.filter(p => hit(p.name, p.email, p.role));
+  s += `<details class="sec" ${q ? 'open' : ''}><summary><b>Comptes (${P.length})</b></summary>${P.map(p => `<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${esc(p.name)}</b> · ${esc(ROLE_TITLE[p.role] || p.role)}<br><span class="small">${esc(p.email || '')}</span><br><span class="muted small">Inscrit le ${esc(fmtDT(Date.parse(p.created_at)))}${p.last_sign_in ? ` · dernière connexion ${esc(fmtDT(Date.parse(p.last_sign_in)))}` : ''}</span></div>`).join('') || '<p class="muted">Aucun.</p>'}</details>`;
+  const Lg = logs.filter(l => hit(l.name, l.city, who(l.owner_id), l.tenant_id ? who(l.tenant_id) : ''));
+  s += `<details class="sec" ${q ? 'open' : ''}><summary><b>Logements (${Lg.length})</b></summary>${Lg.map(l => `<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${esc(l.name)}</b> · ${esc(l.city || '')}<br><span class="small">Propriétaire : ${esc(who(l.owner_id))}</span><br><span class="small">Locataire : ${l.tenant_id ? esc(who(l.tenant_id)) : '<span class="muted">aucun</span>'}</span>${l.tenant_id ? `<br><button class="btn ghost" style="margin-top:6px" data-act="adm-unlink-tenant" data-id="${esc(l.id)}">Détacher le locataire</button>` : ''}</div>`).join('') || '<p class="muted">Aucun.</p>'}</details>`;
+  const Pr = pros.filter(x => hit(x.name, x.trade, who(x.owner_id), x.user_id ? who(x.user_id) : ''));
+  s += `<details class="sec" ${q ? 'open' : ''}><summary><b>Professionnels (${Pr.length})</b></summary>${Pr.map(x => `<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>${esc(x.name)}</b> · ${esc(x.trade || '')}<br><span class="small">Ajouté par : ${esc(who(x.owner_id))}</span><br><span class="small">Compte relié : ${x.user_id ? esc(who(x.user_id)) : '<span class="muted">aucun</span>'}</span>${x.user_id ? `<br><button class="btn ghost" style="margin-top:6px" data-act="adm-unlink-pro" data-id="${esc(x.id)}">Détacher le compte du pro</button>` : ''}</div>`).join('') || '<p class="muted">Aucun.</p>'}</details>`;
+  const D = dos.filter(d => d.data && hit(d.data.title, d.data.num, logName(d.logement_id), ST[d.data.status] || ''))
+    .sort((a, b) => (b.data.updatedAt || 0) - (a.data.updatedAt || 0));
+  s += `<h2>Dossiers (${D.length})</h2>` + (D.map(d => {
+    const x = d.data, m = msgs.filter(y => y.dossier_id === d.id);
+    const hist = [...(x.history || []), ...((d.lp || {}).history || []), ...((d.pp || {}).history || [])].sort((a, b) => a.at - b.at);
+    const quote = d.pp && d.pp.quote;
+    return `<details class="sec"><summary><b>${esc(x.title || '(sans titre)')}</b><br><span class="small">${esc(ST[x.status] || x.status || '')} · ${esc(logName(d.logement_id))}${d.pro_id ? ' · ' + esc(proN(d.pro_id)) : ''}</span><br><span class="muted small">${esc(x.num || '')} · mis à jour le ${esc(fmtDT(x.updatedAt || 0))} · ${m.length} message${m.length > 1 ? 's' : ''}</span></summary>
+      ${x.description ? `<p class="small">${esc(x.description)}</p>` : ''}
+      ${quote ? `<p class="small"><b>Proposition :</b> ${esc(fmtEUR(quote.amount))} · ${esc(quote.status || '')}</p>` : ''}
+      ${m.length ? `<h3>Messages</h3>${m.map(y => `<p class="small"><b>${y.ch === 'lp' ? 'Locataire ↔ propriétaire' : 'Propriétaire ↔ pro'}</b> · ${esc(who(y.author))} · ${esc(fmtDT(Date.parse(y.created_at)))}<br>${esc(y.text)}</p>`).join('')}` : ''}
+      ${hist.length ? `<h3>Historique</h3>${hist.map(h => `<p class="small">${esc(fmtDT(h.at))} · ${esc(h.text || '')}</p>`).join('')}` : ''}
+      <button class="btn danger block" data-act="adm-del-dossier" data-id="${esc(d.id)}">Supprimer ce dossier</button></details>`;
+  }).join('') || '<p class="muted">Aucun dossier.</p>');
+  return s;
+}
+async function admRun(fn, args, okMsg){
+  try { const r = await SH.sb.rpc(fn, args); if (r.error) throw r.error; } catch(e){ return {errors:{_:sbErr(e)}}; }
+  SH.adm = null; await loadAdmin(); reloadShared().catch(() => {}); toast(okMsg); return {silent:true};
+}
+document.addEventListener('input', ev => {
+  if (!ev.target.matches || !ev.target.matches('[data-adm-q]')) return;
+  ui.admQ = ev.target.value; const pos = ev.target.selectionStart; render();
+  const i = $('[data-adm-q]'); if (i){ i.focus(); try { i.setSelectionRange(pos, pos); } catch(e){} }
+});
+document.addEventListener('click', ev => {
+  const t = ev.target.closest('[data-act^="adm-"]'); if (!t || !SH.admin) return;
+  const act = t.dataset.act, id = t.dataset.id;
+  if (act === 'adm-reload'){ SH.adm = null; SH.admErr = ''; render(); return; }
+  if (act === 'adm-unlink-tenant') confirmBox('Détacher le locataire ?', "Il ne verra plus les dossiers de ce logement. Les dossiers sont conservés, et le propriétaire pourra créer un nouveau code.", 'Détacher', () => admRun('rl_admin_unlink_tenant', {p_logement:id}, 'Locataire détaché.'), true);
+  if (act === 'adm-unlink-pro') confirmBox('Détacher le compte du professionnel ?', "Ce compte ne verra plus les dossiers de ce propriétaire. La fiche du professionnel est conservée.", 'Détacher', () => admRun('rl_admin_unlink_pro', {p_pro:id}, 'Professionnel détaché.'), true);
+  if (act === 'adm-del-dossier') confirmBox('Supprimer ce dossier ?', 'Le dossier, ses messages et ses notifications seront effacés pour tout le monde. <b>Cette suppression est définitive.</b>', 'Supprimer définitivement', () => admRun('rl_admin_delete_dossier', {p_id:id}, 'Dossier supprimé.'), true);
+});
+
 function limitsHtml(){
   return `<div class="sec"><h3>Fonctionne réellement</h3><ul><li>Création des dossiers, statuts, propositions, rendez-vous, comptes rendus, échanges et historique.</li><li>Les règles du parcours : un devis modifié demande un nouvel accord, un rendez-vous modifié doit être reconfirmé, une intervention terminée n’est pas clôturée automatiquement.</li><li>Démo : sauvegarde dans le navigateur de ce téléphone.</li><li>Vrai compte (appli installée) : connexion par e-mail et mot de passe, dossiers partagés entre le propriétaire, son locataire et le professionnel choisi, mis à jour toutes les 20 secondes.</li><li>Conversations séparées : le locataire échange avec le propriétaire, le propriétaire avec le professionnel. Le locataire ne voit ni la conversation avec le professionnel ni le montant de la proposition. Ces règles sont vérifiées par le serveur.</li></ul></div>
-  <div class="sec"><h3>Simulé ou pas encore disponible</h3><ul><li>Notifications : affichées dans l'appli seulement, aucun e-mail ni SMS.</li><li>Photos : aperçu local, non enregistré.</li><li>Devis : simple description et montant, pas de PDF ni de signature.</li><li>Démo : le sélecteur de rôle n’est pas une connexion et ne protège rien.</li><li>Vrai compte : qui voit quoi est contrôlé par le serveur, mais l'ordre des étapes (par exemple qui peut accepter une proposition) est encore contrôlé seulement par l'appli. Réservé à une phase de test avec des personnes de confiance.</li><li>Pas encore de page de confidentialité ni de suppression de compte en libre-service.</li><li>Visite préalable : simple indication pour l’instant.</li></ul></div>
+  <div class="sec"><h3>Simulé ou pas encore disponible</h3><ul><li>Notifications : affichées dans l'appli seulement, aucun e-mail ni SMS.</li><li>Photos : aperçu local, non enregistré.</li><li>Devis : simple description et montant, pas de PDF ni de signature.</li><li>Démo : le sélecteur de rôle n’est pas une connexion et ne protège rien.</li><li>Vrai compte : qui voit quoi est contrôlé par le serveur, mais l'ordre des étapes (par exemple qui peut accepter une proposition) est encore contrôlé seulement par l'appli. Réservé à une phase de test avec des personnes de confiance.</li><li>L'administrateur de l'appli peut consulter les dossiers et les messages pour l'assistance et la modération.</li><li>Pas encore de page de confidentialité ni de suppression de compte en libre-service.</li><li>Visite préalable : simple indication pour l’instant.</li></ul></div>
   <div class="banner urg">${esc(URGENCE)}</div>`;
 }
 
