@@ -736,7 +736,7 @@ function render(){
   const m = me();
   let main = '';
   if (!PREFS.welcomed && ui.view === 'home') main = viewWelcome();
-  else if (isShared() && (SH.status !== 'ready' || !SH.me)) main = viewSharedGate();
+  else if (isShared() && (SH.status !== 'ready' || !SH.me) && !(ui.view === 'admin' && SH.admin)) main = viewSharedGate();
   else {
     const V = {home:viewHome, dossiers:viewList, dossier:viewDetail, rdv:viewRdv, logements:viewLogements, signaler:viewReport, notifs:viewNotifs, menu:viewMenu, guide:viewGuide, admin:viewAdmin}[ui.view] || viewHome;
     main = V();
@@ -804,6 +804,7 @@ function viewWelcome(){
       : `<button class="btn primary block" data-act="w-demo">Découvrir la démonstration</button>`}<button class="btn ghost block" data-act="welcome-guide">Lire le guide</button></div>`;
     if (!RL) s += `<p class="muted small" style="text-align:center">Les vrais comptes sont dans l'appli installée : <a href="${esc(APP_LINK)}">${esc(APP_LINK)}</a></p>`;
   } else s += `<p class="muted small" style="text-align:center;margin-top:10px">Touchez votre rôle pour continuer.</p>`;
+  if (RL) s += `<div class="btns"><button class="btn ghost block" data-act="w-login">J'ai déjà un compte : me connecter</button></div>`;
   s += `<p class="muted small" style="text-align:center;margin-top:12px">Répar'Loc coordonne les échanges : il ne diagnostique pas les pannes, n'encaisse aucun paiement et n'est pas un service d'urgence.</p>`;
   return s;
 }
@@ -1129,7 +1130,7 @@ function viewSharedGate(){
   }
   if (st === 'profile'){
     const r = PREFS.chosenRole || '';
-    return `<h1>Bienvenue !</h1><p>Encore une étape : dites-nous qui vous êtes. Ce choix ne pourra plus être modifié.</p>
+    return `${SH.admin ? `<div class="btns"><button class="btn primary block" data-act="go" data-view="admin">Ouvrir l'administration</button></div><p class="muted small">Vous êtes administrateur. Vous pouvez aussi créer votre profil ci-dessous pour utiliser l'appli comme propriétaire.</p>` : ''}<h1>Bienvenue !</h1><p>Encore une étape : dites-nous qui vous êtes. Ce choix ne pourra plus être modifié.</p>
     <form data-form="profile" novalidate>${fText('name', 'Votre nom affiché', {req:true, max:60, attrs:'autocomplete="name"', hint:'Visible par les personnes avec qui vous échangez.'})}
     <p class="lab">Vous êtes</p>${['owner','tenant','pro'].map(k => `<label class="choice"><input type="radio" name="role" value="${k}" ${r === k ? 'checked' : ''}><span><b>${ROLE_TITLE[k]}</b><br><span class="muted small">${k === 'owner' ? 'Je loue un ou plusieurs logements.' : k === 'tenant' ? 'Je loue un logement et je signale les problèmes.' : "J'interviens pour des réparations."}</span></span></label>`).join('')}<div class="err" data-err="role"></div>
     <div class="err" data-err="_"></div><button class="btn primary block" type="submit" style="margin-top:14px">Continuer</button></form>`;
@@ -1180,6 +1181,7 @@ document.addEventListener('click', async ev => {
   if (act === 'open'){ go('dossier', t.dataset.id); return; }
   if (act === 'w-role'){ ui.wRole = t.dataset.role; render(); setTimeout(() => { const b = $('[data-act=w-real],[data-act=w-demo]'); if (b) b.scrollIntoView({block:'center', behavior:'smooth'}); }, 30); return; }
   if (act === 'w-demo'){ PREFS.welcomed = true; PREFS.mode = 'demo'; PREFS.role = {owner:'owner', tenant:'t1', pro:'pr3'}[ui.wRole] || 'owner'; savePrefs(); go('home'); toast('Démonstration : vous pourrez changer de rôle avec le bouton en haut à droite.'); return; }
+  if (act === 'w-login'){ PREFS.welcomed = true; PREFS.mode = 'shared'; savePrefs(); ui.authMode = 'login'; initShared(); go('home'); return; }
   if (act === 'w-real'){ PREFS.welcomed = true; PREFS.mode = 'shared'; PREFS.chosenRole = ui.wRole; savePrefs(); ui.authMode = 'signup'; initShared(); go('home'); return; }
   if (act === 'sh-retry'){ SH.status = 'idle'; initShared(); return; }
   if (act === 'auth-mode'){ ui.authMode = ui.authMode === 'signup' ? 'login' : 'signup'; SH.info = ''; render(); return; }
