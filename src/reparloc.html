@@ -157,6 +157,8 @@ const SINCE = ["Aujourd'hui", 'Depuis quelques jours', "Depuis plus d'une semain
 const IMPACT = ['Gênant mais je peux attendre', "Je ne peux plus utiliser l'équipement ou la pièce", 'Dégâts en cours (eau, humidité…)'];
 const DISPO = ['En semaine le matin', "En semaine l'après-midi", 'En semaine après 17 h', 'Le samedi'];
 const TRADE_RX = {plomberie:/plomb|sanitaire|chauffag/i, electricite:/[ée]lec/i, chauffage:/chauff|chaudi|plomb|clim|gaz/i, menuiserie:/menuis|serrur|vitr|volet|[ée]b[ée]nist|store/i, equipement:/[ée]lectrom[ée]nag|[ée]lec|ventil|vmc/i, autre:/ma[çc]on|peint|b[âa]timent|d[ée]sinsect|nuisible/i};
+const TRADES = ['Plombier', 'Plombier-chauffagiste', 'Chauffagiste', 'Électricien', 'Menuisier', 'Serrurier', 'Vitrier', 'Peintre', 'Maçon', 'Carreleur', 'Couvreur', 'Réparateur électroménager', 'Désinsectisation', 'Artisan multiservice'];
+const CAT_TRADE = {plomberie:'Plombier', electricite:'Électricien', chauffage:'Chauffagiste', menuiserie:'Menuisier', equipement:'Réparateur électroménager', autre:'Artisan multiservice'};
 const proFits = (p, cat) => (TRADE_RX[cat] && TRADE_RX[cat].test(p.trade || '')) || /multi|tous travaux|homme toutes mains|r[ée]novation/i.test(p.trade || '');
 const SLOTS = ['8h – 10h','10h – 12h','12h – 14h','14h – 16h','16h – 18h'];
 const ST = {
@@ -894,7 +896,7 @@ function viewDetail(){
   }
   if (m.role === 'owner' && ACTIONS.transmit.when(d)){
     const fit = ownerPros(m.id).filter(p => proFits(p, d.category) && !(d.declined || []).some(x => x.proId === p.id));
-    s += `<div class="sec"><h3>Professionnels conseillés</h3>${fit.length ? `<p class="muted small">Vos professionnels qui correspondent à ce problème (${esc(CATS[d.category] || '')}). Un geste suffit : le dossier lui est envoyé avec un message déjà rédigé, que vous pouvez modifier.</p>${fit.map(p => `<button class="choice" style="width:100%;text-align:left" data-act="quick-transmit" data-id="${esc(d.id)}" data-pro="${esc(p.id)}"><span>🛠️</span><span><b>Envoyer à ${esc(p.name)}</b><br><span class="muted small">${esc(p.trade)}${isShared() && !p.uid ? ' · pas encore inscrit avec son code' : ''}</span></span></button>`).join('')}` : `<p class="muted small">Aucun de vos professionnels ne correspond à « ${esc(CATS[d.category] || '')} ». Ajoutez-en un dans l'onglet « Logements », ou utilisez « Transmettre à un professionnel ».</p>`}</div>`;
+    s += `<div class="sec"><h3>Professionnels conseillés</h3>${fit.length ? `<p class="muted small">Vos professionnels qui correspondent à ce problème (${esc(CATS[d.category] || '')}). Un geste suffit : le dossier lui est envoyé avec un message déjà rédigé, que vous pouvez modifier.</p>${fit.map(p => `<button class="choice" style="width:100%;text-align:left" data-act="quick-transmit" data-id="${esc(d.id)}" data-pro="${esc(p.id)}"><span>🛠️</span><span><b>Envoyer à ${esc(p.name)}</b><br><span class="muted small">${esc(p.trade)}${isShared() && !p.uid ? ' · pas encore inscrit avec son code' : ''}</span></span></button>`).join('')}` : `<p class="muted small">Aucun de vos professionnels ne correspond à « ${esc(CATS[d.category] || '')} ». Ajoutez celui que vous connaissez, ou utilisez « Transmettre à un professionnel ».</p>`}<button class="btn block" data-act="add-pro" data-d="${esc(d.id)}" data-cat="${esc(d.category)}">➕ Ajouter mon propre professionnel</button></div>`;
   }
   if (m.role === 'tenant' && !CLOSED.includes(d.status)) s += `<div class="banner urg">${esc(URGENCE)}</div>`;
   // Problème
@@ -975,10 +977,10 @@ function viewLogements(){
     return `<div class="card"><h3>${esc(L.name)}</h3><div class="muted">${esc(L.city)}</div><p><b>${open}</b> dossier${open > 1 ? 's' : ''} ouvert${open > 1 ? 's' : ''}</p>${extra}<div class="btns"><button class="btn primary block" data-act="list-log" data-id="${esc(L.id)}">Voir les dossiers de ce logement</button></div></div>`;
   }).join('') : `<div class="empty">Aucun logement. ${isShared() ? 'Ajoutez votre premier logement : un code sera créé pour inviter votre locataire.' : ''}</div>`;
   if (isShared()) s += `<button class="btn primary block" data-act="add-logement">Ajouter un logement</button>`;
-  s += `<h2>Mes professionnels</h2><p class="muted small">Vous choisissez vos propres professionnels. L'appli ne garantit pas leur disponibilité.</p>`;
+  s += `<h2>Mes professionnels</h2><p class="muted small">Ajoutez les professionnels que vous connaissez déjà : l'appli vous les proposera quand un problème correspond à leur métier. Elle ne garantit pas leur disponibilité.</p>`;
   const ps = ownerPros(m.id);
-  s += ps.length ? ps.map(p => `<div class="card"><h3>${esc(p.name)}</h3><div class="muted">${esc(p.trade)}</div>${isShared() ? (p.uid ? `<p class="small">Inscrit dans l'appli</p>` : p.inviteCode ? codeBox(p.inviteCode, 'pour ce professionnel') : `<button class="btn block" data-act="new-code" data-kind="pro" data-id="${esc(p.id)}">Créer un code</button>`) : '<p class="muted small">Professionnel fictif</p>'}</div>`).join('') : `<div class="empty">Aucun professionnel pour le moment.</div>`;
-  if (isShared()) s += `<button class="btn primary block" data-act="add-pro">Ajouter un professionnel</button>`;
+  s += ps.length ? ps.map(p => `<div class="card"><h3>${esc(p.name)}</h3><div class="muted">${esc(p.trade)}</div>${isShared() ? (p.uid ? `<p class="small">Inscrit dans l'appli</p>` : p.inviteCode ? codeBox(p.inviteCode, 'pour ce professionnel') : `<button class="btn block" data-act="new-code" data-kind="pro" data-id="${esc(p.id)}">Créer un code</button>`) : `<p class="muted small">${p.id.startsWith('px') ? 'Ajouté par vous (démo)' : 'Professionnel fictif'}</p>`}</div>`).join('') : `<div class="empty">Aucun professionnel pour le moment.</div>`;
+  s += `<button class="btn primary block" data-act="add-pro">➕ Ajouter un professionnel que je connais</button>`;
   return s;
 }
 function viewReport(){
@@ -1243,7 +1245,7 @@ document.addEventListener('click', async ev => {
   if (act === 'role'){
     const P = DEMO.people;
     const btn = id => `<button type="button" class="choice" style="width:100%;text-align:left" data-act="pick-role" data-id="${id}"><span><b>${esc(P[id].role === 'pro' ? proName(P[id].proId) : P[id].name)}</b><br><span class="muted small">${esc(P[id].role === 'tenant' ? 'Locataire – ' + (DEMO.logements.find(l => l.tenantId === id) || {}).city : P[id].role === 'pro' ? (pro(P[id].proId) || {}).trade : 'Propriétaire des deux logements')}</span></span></button>`;
-    openModal('Tester en tant que…', `<p class="muted small">Ce sélecteur sert uniquement à tester. Ce n'est pas une connexion et il ne protège aucune donnée.</p><p class="lab">Propriétaire</p>${btn('owner')}<p class="lab">Locataires</p>${btn('t1')}${btn('t2')}<p class="lab">Professionnels</p>${['pr1','pr2','pr3','pr4'].map(btn).join('')}`, null, null, {cancel:'Fermer'});
+    openModal('Tester en tant que…', `<p class="muted small">Ce sélecteur sert uniquement à tester. Ce n'est pas une connexion et il ne protège aucune donnée.</p><p class="lab">Propriétaire</p>${btn('owner')}<p class="lab">Locataires</p>${btn('t1')}${btn('t2')}<p class="lab">Professionnels</p>${Object.keys(P).filter(k => P[k].role === 'pro').map(btn).join('')}`, null, null, {cancel:'Fermer'});
     return;
   }
   if (act === 'pick-role'){
@@ -1304,14 +1306,34 @@ document.addEventListener('click', async ev => {
     return;
   }
   if (act === 'add-pro'){
-    openModal('Ajouter un professionnel', `${fText('name', "Nom de l'entreprise ou du professionnel", {req:true, max:60})}${fText('trade', 'Métier', {req:true, max:40, attrs:'placeholder="Ex. : Plombier"'})}`, 'Ajouter', async f => {
+    const dId = t.dataset.d || null, cat = t.dataset.cat || '';
+    const body = `<p class="muted small">Ajoutez un professionnel que vous connaissez déjà (votre plombier, un artisan de confiance…). Il recevra un code pour retrouver vos dossiers dans l'appli.</p>
+      ${fText('name', "Nom de l'entreprise ou du professionnel", {req:true, max:60, attrs:'autocomplete="organization"'})}
+      ${fText('trade', 'Métier', {req:true, max:40, value:CAT_TRADE[cat] || '', attrs:'list="trade-list" placeholder="Ex. : Plombier"'})}<datalist id="trade-list">${TRADES.map(x => `<option value="${esc(x)}">`).join('')}</datalist>`;
+    openModal('Ajouter mon professionnel', body, 'Ajouter', async f => {
       const errors = {};
       if (tooShort(f.name, 2)) errors.name = 'Indiquez un nom.';
       if (tooShort(f.trade, 3)) errors.trade = 'Indiquez le métier.';
       if (Object.keys(errors).length) return {errors};
-      try { const [row] = await q(SH.sb.from('rl_pros').insert({name:f.name.trim(), trade:f.trade.trim()}).select('id')); await createInvite('pro', row.id); await reloadShared(); }
-      catch(e){ return {errors:{_:sbErr(e)}}; }
-      toast('Professionnel ajouté. Transmettez-lui son code.'); return {silent:true};
+      const name = f.name.trim(), trade = f.trade.trim();
+      let pid, code = null;
+      if (isShared()){
+        try { const [row] = await q(SH.sb.from('rl_pros').insert({name, trade}).select('id')); pid = row.id; code = await createInvite('pro', pid); await reloadShared(); }
+        catch(e){ return {errors:{_:sbErr(e)}}; }
+      } else {
+        pid = 'px' + newId();
+        DEMO.pros.push({id:pid, name, trade, ownerId:me().id, uid:pid});
+        DEMO.people[pid] = {id:pid, role:'pro', name, proId:pid};
+        saveDemo();
+      }
+      const send = dId ? () => { setTimeout(() => { const d = getD(dId); if (d && ACTIONS.transmit.when(d)){ ui.prePro = pid; ACTIONS.transmit.open(d); } }, 60); return {silent:true}; } : null;
+      setTimeout(() => {
+        render();
+        const inv = code ? `<p>Envoyez-lui ce code : il crée son compte « Professionnel » et le saisit pour retrouver vos dossiers.</p><p><span class="code">${esc(fmtCode(code))}</span></p><button type="button" class="btn block" data-act="share-code" data-code="${esc(fmtCode(code))}">Envoyer l'invitation (SMS, WhatsApp…)</button><p class="muted small">Le code reste aussi visible dans l'onglet « Logements ».</p>`
+          : `<p class="muted small">Démonstration : ${esc(name)} est ajouté au sélecteur de rôle, vous pouvez jouer son rôle. Dans le vrai compte, il recevrait un code d'invitation.</p>`;
+        openModal(`${name} est ajouté`, inv + (dId ? `<p>Vous pouvez lui envoyer ce dossier dès maintenant${code ? ' : il le verra dès qu’il aura saisi son code' : ''}.</p>` : ''), dId ? 'Lui envoyer ce dossier' : null, send, {cancel:'Fermer'});
+      }, 60);
+      return {silent:true};
     });
     return;
   }
