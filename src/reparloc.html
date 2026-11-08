@@ -100,6 +100,16 @@ input:focus,select:focus,textarea:focus{outline:3px solid #9cc7ae;border-color:v
 .hist time{display:block;font-size:12.5px;color:var(--muted)}
 .empty{text-align:center;padding:22px 12px;color:var(--muted);background:#fff;border:1px dashed #c4cdc8;border-radius:var(--r);margin:10px 0}
 .photo{border-radius:12px;border:1px solid var(--line);max-width:100%;display:block}
+.mgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}
+.mgrid .mi{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;background:#e9eee9;border:1px solid var(--line)}
+.mgrid .mi img,.mgrid .mi video{width:100%;height:100%;object-fit:cover;display:block}
+.mgrid .mi .x{position:absolute;top:4px;right:4px;width:28px;height:28px;border-radius:50%;border:0;background:rgba(0,0,0,.6);color:#fff;font-size:16px;line-height:28px;padding:0;cursor:pointer}
+.mgrid .mi .tag{position:absolute;left:4px;bottom:4px;background:rgba(0,0,0,.6);color:#fff;font-size:11px;border-radius:6px;padding:1px 5px}
+.mview video{width:100%;border-radius:12px;background:#000;display:block;margin:8px 0}
+.mview img{width:100%;border-radius:12px;display:block;margin:8px 0}
+.pickbtn{display:flex;align-items:center;justify-content:center;gap:8px;border:2px dashed #b9c4be;border-radius:12px;padding:14px;cursor:pointer;background:#fff;font-weight:600;color:var(--green)}
+.pickbtn input{position:absolute;width:1px;height:1px;opacity:0}
+#g-where-slot .lab{margin-top:0}
 figure{margin:8px 0}
 figcaption{font-size:13.5px;color:var(--muted)}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -311,10 +321,10 @@ async function afterLogin(user){
   try { const r = await SH.sb.rpc('rl_is_admin'); SH.admin = !r.error && r.data === true; } catch(e){ SH.admin = false; }
   await reloadShared();
   if (!SH.timer) SH.timer = setInterval(() => {
-    if (isShared() && document.visibilityState === 'visible' && SH.status === 'ready' && !$('#modal-form') && !isTyping()) reloadShared().catch(() => {});
+    if (isShared() && document.visibilityState === 'visible' && SH.status === 'ready' && !$('#modal-form') && !isTyping() && ui.view !== 'signaler') reloadShared().catch(() => {});
   }, 20000);
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && isShared() && SH.status === 'ready' && !$('#modal-form')) reloadShared().catch(() => {}); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && isShared() && SH.status === 'ready' && !$('#modal-form') && ui.view !== 'signaler') reloadShared().catch(() => {}); });
 
 /* Un dossier est rangé en trois parts : commune, locataire ↔ propriétaire (lp), propriétaire ↔ professionnel (pp).
    Le serveur ne donne à chacun que les parts qu'il a le droit de voir. */
@@ -507,10 +517,100 @@ async function commit(d, histText, roles, notifText, opts = {}){
 
 /* ---------- Interface : état ---------- */
 const ui = {view:'home', id:null, f:{logement:'all', etat:'open', mine:false}};
-const memPhotos = {}; // photos ajoutées : en mémoire seulement
+const memPhotos = {}; // ancien aperçu photo (démo)
 let pendingPhoto = null;
+/* Photos et vidéos. Vrai compte : stockées dans Supabase (rangement privé « rl-media », un dossier par signalement,
+   lisibles seulement par les participants). Démo : aperçu sur ce téléphone, perdu au rechargement. */
+const MEDIA_MAX = 10, VIDEO_MAX_MB = 50;
+const memMedia = {};      // démo : id dossier -> [{url, k}]
+let pendingMedia = [];    // fichiers choisis dans le formulaire en cours : [{file, url, k}]
+const signed = {};        // chemin -> {url, exp}
+const mediaKind = f => /^video\//.test(f.type) ? 'vid' : 'img';
+function addPending(files, box){
+  let err = '';
+  for (const f of files){
+    if (!/^(image|video)\//.test(f.type)){ err = 'Seules les photos et les vidéos sont acceptées.'; continue; }
+    if (pendingMedia.length >= MEDIA_MAX){ err = `${MEDIA_MAX} fichiers maximum.`; break; }
+    if (mediaKind(f) === 'vid' && f.size > VIDEO_MAX_MB * 1048576){ err = `Vidéo trop lourde (${Math.round(f.size / 1048576)} Mo, ${VIDEO_MAX_MB} Mo maximum) : filmez 20 à 30 secondes suffisent.`; continue; }
+    pendingMedia.push({file:f, url:URL.createObjectURL(f), k:mediaKind(f)});
+  }
+  drawPending(box, err);
+}
+function drawPending(box, err){
+  if (!box) return;
+  box.innerHTML = pendingHtml(err);
+}
+function pendingHtml(err){
+  return (pendingMedia.length ? `<div class="mgrid">${pendingMedia.map((m, i) => `<div class="mi">${m.k === 'vid' ? `<video src="${m.url}#t=0.1" muted playsinline preload="metadata"></video><span class="tag">▶ vidéo</span>` : `<img src="${m.url}" alt="Photo ${i + 1}">`}<button type="button" class="x" data-act="media-rm" data-i="${i}" aria-label="Retirer">×</button></div>`).join('')}</div>` : '') + (err ? `<div class="err">${esc(err)}</div>` : '');
+}
+function clearPending(){ pendingMedia.forEach(m => { try { URL.revokeObjectURL(m.url); } catch(e){} }); pendingMedia = []; }
+async function shrinkImage(file){
+  // réduit les photos (1600 px, JPEG) pour un envoi rapide ; garde l'original en cas d'échec
+  try {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.82));
+    return blob && blob.size < file.size ? blob : file;
+  } catch(e){ return file; }
+}
+async function uploadPending(d){
+  // renvoie la liste des médias enregistrés ; en démo, garde un aperçu local
+  const out = [], list = pendingMedia; pendingMedia = [];
+  if (!list.length) return out;
+  if (!isShared()){ memMedia[d.id] = (memMedia[d.id] || []).concat(list.map(m => ({url:m.url, k:m.k}))); return list.map(m => ({k:m.k, local:true, at:Date.now(), by:me().id})); }
+  let failed = 0;
+  for (const m of list){
+    try {
+      const body = m.k === 'img' ? await shrinkImage(m.file) : m.file;
+      const ext = m.k === 'img' ? 'jpg' : ((m.file.name.split('.').pop() || 'mp4').toLowerCase().replace(/[^a-z0-9]/g, '') || 'mp4');
+      const path = `${d.id}/${newId()}.${ext}`;
+      const r = await SH.sb.storage.from('rl-media').upload(path, body, {contentType:m.k === 'img' && body !== m.file ? 'image/jpeg' : (m.file.type || 'application/octet-stream'), upsert:false});
+      if (r.error) throw r.error;
+      out.push({p:path, k:m.k, at:Date.now(), by:me().id});
+    } catch(e){ failed++; }
+    try { URL.revokeObjectURL(m.url); } catch(e){}
+  }
+  if (failed) toast(`${failed} fichier${failed > 1 ? 's n’ont' : ' n’a'} pas pu être envoyé${failed > 1 ? 's' : ''}. Vérifiez la connexion et réessayez depuis le dossier.`, true);
+  return out;
+}
+async function attachMedia(d, ctxText){
+  const n = pendingMedia.length; if (!n) return;
+  const added = await uploadPending(d);
+  if (!added.length) return;
+  const fresh = getD(d.id) || d;
+  fresh.media = (fresh.media || []).concat(added.filter(m => !m.local));
+  if (!isShared()) fresh.mediaDemo = (fresh.mediaDemo || 0) + added.length;
+  const nb = added.length, lbl = `${nb} photo${nb > 1 ? 's' : ''} ou vidéo${nb > 1 ? 's' : ''}`;
+  const roles = ['owner','tenant','pro'].filter(r => r !== me().role && (r !== 'pro' || fresh.proId));
+  await commit(fresh, ctxText || `${lbl} ajoutée${nb > 1 ? 's' : ''}`, roles, `${lbl} ajoutée${nb > 1 ? 's' : ''} au dossier`);
+}
+async function signMedia(paths){
+  const need = paths.filter(p => !signed[p] || signed[p].exp < Date.now() + 60000);
+  if (!need.length || !isShared()) return;
+  try {
+    const r = await SH.sb.storage.from('rl-media').createSignedUrls(need, 3600);
+    (r.data || []).forEach(x => { if (x.signedUrl) signed[x.path] = {url:x.signedUrl, exp:Date.now() + 3500000}; });
+  } catch(e){}
+  if (ui.view === 'dossier') render();
+}
+function mediaSection(d){
+  const items = (d.media || []).filter(m => m.p);
+  const local = memMedia[d.id] || [];
+  const closed = CLOSED.includes(d.status);
+  if (!items.length && !local.length && closed) return '';
+  if (items.length) { const miss = items.map(m => m.p).filter(p => !signed[p]); if (miss.length) setTimeout(() => signMedia(miss), 0); }
+  const one = (k, url, alt) => !url ? `<div class="muted small">Chargement…</div>` : k === 'vid' ? `<video src="${url}" controls playsinline preload="metadata"></video>` : `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${esc(alt)}" loading="lazy"></a>`;
+  let inner = items.map((m, i) => one(m.k, signed[m.p] && signed[m.p].url, `Photo ${i + 1}`)).join('') + local.map((m, i) => one(m.k, m.url, `Photo ${i + 1}`)).join('');
+  if (!inner) inner = `<p class="muted small">Aucune photo ni vidéo pour l'instant.</p>`;
+  if (local.length) inner += `<p class="muted small">Démonstration : aperçu sur ce téléphone seulement, perdu au rechargement.</p>`;
+  else if (!isShared() && d.mediaDemo) inner += `<p class="muted small">Démonstration : des photos avaient été ajoutées, mais elles ne sont pas conservées après rechargement.</p>`;
+  if (!closed) inner += `<label class="pickbtn" style="position:relative;margin-top:8px">📷 Ajouter des photos ou une vidéo<input type="file" accept="image/*,video/*" multiple data-media-add="${esc(d.id)}"></label><div id="media-add-box"></div>`;
+  return `<div class="sec mview"><h3>Photos et vidéos (${items.length + local.length})</h3>${inner}</div>`;
+}
 
-function go(view, id){ ui.view = view; ui.id = id || null; render(); window.scrollTo(0, 0); }
+function go(view, id){ if (view !== 'signaler' && ui.view === 'signaler') clearPending(); ui.view = view; ui.id = id || null; render(); window.scrollTo(0, 0); }
 let toastT = null;
 function toast(msg, bad){ const t = $('#toast'); t.textContent = msg; t.className = 'show' + (bad ? ' bad' : ''); clearTimeout(toastT); toastT = setTimeout(() => t.className = '', 4200); }
 
@@ -904,7 +1004,8 @@ function viewDetail(){
   if (d.photo === 'example') prob += `<figure><img class="photo" src="${SHUTTER_SVG}" alt="Illustration fictive d'un volet bloqué"><figcaption>Exemple fictif (pas une vraie photo).</figcaption></figure>`;
   if (memPhotos[d.id]) prob += `<figure><img class="photo" src="${memPhotos[d.id]}" alt="Photo ajoutée"><figcaption>Aperçu local : cette photo n'est pas enregistrée et disparaîtra au rechargement${isShared() ? ' ; les autres participants ne la voient pas' : ''}.</figcaption></figure>`;
   else if (d.photoLost) prob += `<p class="muted small">Une photo avait été ajoutée, mais elle n'est pas conservée dans ce prototype.</p>`;
-  s += section('Le problème', prob);
+  const mediaHtml = mediaSection(d);
+  s += section('Le problème', prob) + mediaHtml;
   // Participants
   s += section('Participants', `<dl class="kv"><dt>Locataire</dt><dd>${esc(L && L.tenantId ? personLabel(L.tenantId) : 'Pas de locataire inscrit')}</dd><dt>Propriétaire</dt><dd>${esc(L ? personLabel(L.ownerId) : '—')}</dd><dt>Professionnel</dt><dd>${esc(d.proId ? `${proName(d.proId)} – ${(pro(d.proId) || {}).trade || ''}${d.accepted ? ' (a accepté)' : ' (n’a pas encore répondu)'}` : 'Aucun pour le moment')}</dd></dl>${(d.declined || []).length && canSeeCh('pp') ? `<p class="muted small">Ont décliné : ${d.declined.map(x => esc(proName(x.proId)) + ' (« ' + esc(x.reason) + ' »)').join(', ')}</p>` : ''}`);
   // Précisions
@@ -993,12 +1094,13 @@ function viewReport(){
     <label class="lab" for="f-log">Logement</label>${Ls.length > 1 ? `<select id="f-log" name="logement">${Ls.map(L => `<option value="${esc(L.id)}">${esc(L.name)} – ${esc(L.city)}</option>`).join('')}</select>` : `<input type="hidden" name="logement" value="${esc(Ls[0].id)}"><div class="card" style="margin:0">${esc(Ls[0].name)} · ${esc(Ls[0].city)}</div>`}
     <p class="lab">1. Quel type de problème ?</p><div class="chips">${Object.entries(CATS).map(([k, l]) => `<label class="choice"><input type="radio" name="cat" value="${k}" data-guided="cat"><span>${CAT_ICON[k]} ${l}</span></label>`).join('')}</div><div class="err" data-err="cat"></div>
     <div id="g-prob" hidden><p class="lab">2. Choisissez le problème</p><div id="g-prob-list"></div><div class="err" data-err="prob"></div></div>
+    <div id="g-where-slot" hidden>${fText('where', 'Où exactement ?', {max:120, attrs:'placeholder="Ex. : sous l’évier de la cuisine"'})}</div>
     <div id="g-danger" hidden></div>
     <div id="g-preset" hidden>
       <p class="lab">3. Où ?</p><div class="chips">${ROOMS.map(r => `<label class="choice"><input type="radio" name="room" value="${esc(r)}"><span>${esc(r)}</span></label>`).join('')}</div>
       <p class="lab">Depuis quand ?</p>${SINCE.map(r => `<label class="choice"><input type="radio" name="since" value="${esc(r)}"><span>${esc(r)}</span></label>`).join('')}
       <p class="lab">Est-ce gênant ?</p>${IMPACT.map(r => `<label class="choice"><input type="radio" name="impact" value="${esc(r)}"><span>${esc(r)}</span></label>`).join('')}
-      ${fArea('more', 'Un détail à ajouter ?', {hint:'Facultatif : marque de l’appareil, ce que vous avez déjà essayé…'})}
+      ${fArea('more', 'Un détail à ajouter ?', {hint:'Marque de l’appareil, ce que vous avez déjà essayé…'})}
     </div>
     <div id="g-custom" hidden>
       ${fText('title', 'Titre', {req:true, max:80, attrs:'placeholder="Ex. : Volet du salon bloqué"'})}
@@ -1006,8 +1108,9 @@ function viewReport(){
     </div>
     <p class="lab">Quand êtes-vous disponible pour l'intervention ?</p><div class="chips">${DISPO.map(r => `<label class="choice"><input type="checkbox" name="dchip" value="${esc(r)}"><span>${esc(r)}</span></label>`).join('')}</div>
     ${fText('dispo', 'Autre précision sur vos disponibilités', {max:160, attrs:'placeholder="Ex. : pas le mercredi"'})}
-    <label class="lab" for="f-photo">Photo <span class="muted small">(facultatif)</span></label><div class="hint">Aperçu local seulement : la photo n'est pas enregistrée et disparaît au rechargement${isShared() ? ', et les autres ne la voient pas' : ''}.</div>
-    <input type="file" id="f-photo" accept="image/*" data-photo="1" style="max-width:100%"><div id="photo-prev"></div>
+    <p class="lab">Photos ou vidéo du problème <span class="muted small">(conseillé)</span></p>
+    <div class="hint">Montrez directement le problème : prenez une photo, filmez 20 à 30 secondes, ou choisissez dans votre galerie. ${isShared() ? 'Visibles par votre propriétaire et le professionnel choisi.' : 'Démonstration : aperçu sur ce téléphone seulement.'}</div>
+    <label class="pickbtn" style="position:relative">📷 Prendre ou choisir des photos / une vidéo<input type="file" accept="image/*,video/*" multiple data-media-new="1"></label><div id="media-new-box">${pendingHtml()}</div>
     <div class="banner urg" style="margin-top:16px"><b>Avant d'envoyer :</b> ${esc(URGENCE)} En cas de fuite de gaz, d'odeur de brûlé ou de risque électrique, n'attendez pas de réponse dans l'appli.</div>
     <div class="err" data-err="_"></div>
     <button class="btn primary block" type="submit" style="margin-top:12px">Envoyer le signalement</button>
@@ -1257,6 +1360,10 @@ document.addEventListener('click', async ev => {
     render(); toast('Vous testez maintenant : ' + (me().role === 'pro' ? proName(me().proId) : me().name) + ' (' + ROLE_WORD[me().role] + ').');
     return;
   }
+  if (act === 'media-rm'){
+    const i = +t.dataset.i; const m = pendingMedia[i]; if (m){ try { URL.revokeObjectURL(m.url); } catch(e){} pendingMedia.splice(i, 1); }
+    drawPending(t.closest('[id$=-box]'), ''); return;
+  }
   if (act === 'quick-transmit'){
     const d = getD(t.dataset.id);
     if (!d || !ACTIONS.transmit.when(d) || me().role !== 'owner'){ toast('Cette action n’est plus possible : le dossier a changé.', true); render(); return; }
@@ -1366,7 +1473,7 @@ function guidedProb(form){
   const cat = (form.querySelector('input[name=cat]:checked') || {}).value, pv = (form.querySelector('input[name=prob]:checked') || {}).value;
   return {cat, pv, item:cat && pv && pv !== 'autre' ? PROBS[cat][+pv] : null};
 }
-document.addEventListener('change', ev => {
+document.addEventListener('change', async ev => {
   const t = ev.target;
   if (t.dataset.guided === 'cat'){
     const box = $('#g-prob-list');
@@ -1377,11 +1484,22 @@ document.addEventListener('change', ev => {
   if (t.dataset.guided === 'prob'){
     const g = guidedProb(t.form);
     $('#g-preset').hidden = !g.item; $('#g-custom').hidden = !!g.item;
+    const slot = $('#g-where-slot'), lab = t.closest('label'); if (slot && lab){ lab.after(slot); slot.hidden = false; const w = $('#f-where'); if (w) setTimeout(() => w.focus({preventScroll:true}), 30); }
     const dg = $('#g-danger'); dg.hidden = !(g.item && g.item.danger);
     dg.innerHTML = g.item && g.item.danger ? `<div class="banner err" style="margin-top:12px"><b>Urgence, à faire tout de suite :</b> ${esc(g.item.danger)}<br>Vous pouvez ensuite envoyer ce signalement pour informer votre propriétaire, mais n'attendez pas sa réponse.</div>` : '';
   }
   if (t.dataset.filter === 'logement'){ ui.f.logement = t.value; render(); }
   if (t.dataset.filter === 'mine'){ ui.f.mine = t.checked; render(); }
+  if (t.dataset.mediaNew){ addPending([...(t.files || [])], $('#media-new-box')); t.value = ''; return; }
+  if (t.dataset.mediaAdd){
+    const d = getD(t.dataset.mediaAdd); const files = [...(t.files || [])]; t.value = '';
+    if (!d || !files.length) return;
+    clearPending(); addPending(files, $('#media-add-box'));
+    if (!pendingMedia.length) return;
+    $('#media-add-box').insertAdjacentHTML('beforeend', `<p class="muted small">Envoi en cours…</p>`);
+    try { await attachMedia(d); toast('Ajouté au dossier.'); } catch(e){ toast(sbErr(e), true); }
+    clearPending(); render(); return;
+  }
   if (t.dataset.photo){
     const file = t.files && t.files[0];
     const box = $('#photo-prev');
@@ -1422,13 +1540,14 @@ document.addEventListener('submit', async ev => {
     const g = guidedProb(form);
     if (!f.cat) errors.cat = 'Choisissez une catégorie.';
     else if (!g.pv) errors.prob = 'Choisissez le problème, ou « Autre problème ».';
+    if (g.pv === 'autre' && f.where && f.where.trim()) f.desc = (f.desc || '').trim() + '\nEndroit précis : ' + f.where.trim() + '.';
     if (g.pv === 'autre'){
       if (tooShort(f.title, 5)) errors.title = 'Donnez un titre (5 caractères minimum).';
       if (tooShort(f.desc, 15)) errors.desc = 'Décrivez le problème (15 caractères minimum).';
     }
     if (g.item){
       f.title = g.item.t + (f.room ? ' – ' + f.room : '');
-      f.desc = [g.item.t + '.', f.room && 'Où : ' + f.room + '.', f.since && 'Depuis : ' + f.since.toLowerCase() + '.', f.impact && 'Gêne : ' + f.impact.toLowerCase() + '.', f.more && f.more.trim() && 'Précisions : ' + f.more.trim()].filter(Boolean).join('\n');
+      f.desc = [g.item.t + '.', f.where && f.where.trim() && 'Endroit précis : ' + f.where.trim() + '.', f.room && 'Pièce : ' + f.room + '.', f.since && 'Depuis : ' + f.since.toLowerCase() + '.', f.impact && 'Gêne : ' + f.impact.toLowerCase() + '.', f.more && f.more.trim() && 'Précisions : ' + f.more.trim()].filter(Boolean).join('\n');
     }
     const chips = [...form.querySelectorAll('input[name=dchip]:checked')].map(x => x.value);
     f.dispo = [chips.join(', '), (f.dispo || '').trim()].filter(Boolean).join('. ');
@@ -1441,7 +1560,11 @@ document.addEventListener('submit', async ev => {
       qa:[], quote:null, quoteHistory:[], appointment:null, apptHistory:[], report:null, feedback:null, followUp:null, closure:null, past:[], declined:[], messages:[], history:[], proId:null, accepted:false, photo:null, photoLost:!!pendingPhoto, createdAt:now, updatedAt:now};
     const res = await run(() => commit(d, 'Signalement créé', ['owner'], 'Nouveau signalement'));
     if (res && res.errors){ showErrors(form, res.errors); return; }
-    if (pendingPhoto){ memPhotos[id] = pendingPhoto; pendingPhoto = null; }
+    if (pendingMedia.length){
+      const nb = pendingMedia.length;
+      const btn2 = form.querySelector('button[type=submit]'); if (btn2){ btn2.disabled = true; btn2.textContent = `Envoi de ${nb} fichier${nb > 1 ? 's' : ''}…`; }
+      try { await attachMedia(d, `${nb} photo${nb > 1 ? 's' : ''} ou vidéo${nb > 1 ? 's' : ''} jointe${nb > 1 ? 's' : ''} au signalement`); } catch(e){ toast(sbErr(e), true); }
+    }
     toast('Signalement envoyé au propriétaire.');
     go('dossier', id);
     return;
