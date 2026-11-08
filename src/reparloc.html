@@ -80,6 +80,7 @@ input:focus,select:focus,textarea:focus{outline:3px solid #9cc7ae;border-color:v
 .nav{position:fixed;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));bottom:calc(10px + env(safe-area-inset-bottom,0px));max-width:616px;margin:0 auto;background:rgba(255,255,255,.94);-webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);border:1px solid rgba(31,90,61,.12);border-radius:24px;box-shadow:0 10px 30px rgba(20,48,31,.18),0 2px 6px rgba(20,48,31,.08);z-index:30;overflow:hidden}
 .nav-in{max-width:640px;margin:0 auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}
 .nav button{background:none;border:0;padding:8px 2px 9px;min-height:58px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:12px;color:var(--muted);cursor:pointer;position:relative}
+.nav button span{white-space:nowrap;font-size:11.5px}
 .nav button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .nav button[aria-current=page]{color:var(--green);font-weight:700}
 .nav .dot{position:absolute;top:5px;right:calc(50% - 20px);background:var(--danger);color:#fff;border-radius:999px;font-size:11px;min-width:18px;height:18px;line-height:18px;padding:0 4px}
@@ -141,6 +142,22 @@ const clone = o => JSON.parse(JSON.stringify(o));
 const DAY = 86400000, HOUR = 3600000;
 
 const CATS = {plomberie:'Plomberie', electricite:'Électricité', chauffage:'Chauffage', menuiserie:'Menuiserie', equipement:'Équipement', autre:'Autre'};
+const CAT_ICON = {plomberie:'💧', electricite:'⚡', chauffage:'🔥', menuiserie:'🚪', equipement:'🍳', autre:'🏠'};
+/* Problèmes courants proposés au locataire. danger : message de sécurité affiché avant l'envoi. */
+const PROBS = {
+  plomberie:[{t:"Fuite d'eau sous un évier ou un lavabo"}, {t:"Chasse d'eau qui coule en continu"}, {t:'WC bouchés'}, {t:"Évier, douche ou baignoire qui s'écoule mal"}, {t:'Robinet qui fuit ou goutte'}, {t:"Tache d'humidité, dégât des eaux"}, {t:"Grosse fuite : l'eau coule sans s'arrêter", danger:"Coupez l'arrivée d'eau générale (souvent sous l'évier ou près du compteur) et prévenez vos voisins du dessous. Si l'eau touche des prises ou des appareils électriques, coupez aussi le disjoncteur."}],
+  electricite:[{t:'Prise qui ne fonctionne plus'}, {t:'Lumière ou interrupteur en panne'}, {t:'Le disjoncteur saute'}, {t:"Plus de courant dans une pièce"}, {t:'Sonnette ou interphone en panne'}, {t:'Prise ou fil qui chauffe, étincelles, odeur de brûlé', danger:"Coupez le disjoncteur général et ne touchez à rien. En cas de fumée ou de début d'incendie, appelez les pompiers (18 ou 112)."}],
+  chauffage:[{t:'Radiateur qui reste froid'}, {t:'Plus de chauffage du tout'}, {t:'Chaudière en panne ou en sécurité'}, {t:"Pas d'eau chaude (ballon, chauffe-eau)"}, {t:'Radiateur qui fuit'}, {t:'Thermostat qui ne répond plus'}, {t:'Odeur de gaz', danger:"N'allumez rien, n'utilisez aucun interrupteur, ouvrez les fenêtres, sortez du logement et appelez Urgence Sécurité Gaz au 0 800 47 33 33 (gratuit, 24 h/24) ou le 112."}],
+  menuiserie:[{t:'Volet roulant bloqué'}, {t:'Porte qui ferme mal'}, {t:'Fenêtre qui ne ferme plus'}, {t:'Serrure ou poignée cassée'}, {t:'Vitre fêlée ou cassée'}, {t:'Placard, tiroir ou parquet abîmé'}],
+  equipement:[{t:'Plaque de cuisson en panne'}, {t:'Four en panne'}, {t:'Hotte ou VMC qui ne fonctionne plus'}, {t:'Lave-linge fourni en panne'}, {t:'Réfrigérateur fourni en panne'}, {t:'Moisissures, mauvaise aération'}],
+  autre:[{t:'Nuisibles (cafards, punaises, souris…)'}, {t:'Infiltration par le toit ou un mur'}, {t:'Fissure dans un mur ou un plafond'}, {t:'Problème dans les parties communes'}]
+};
+const ROOMS = ['Cuisine', 'Salle de bain', 'WC', 'Salon', 'Chambre', 'Entrée / couloir', 'Extérieur', 'Tout le logement'];
+const SINCE = ["Aujourd'hui", 'Depuis quelques jours', "Depuis plus d'une semaine"];
+const IMPACT = ['Gênant mais je peux attendre', "Je ne peux plus utiliser l'équipement ou la pièce", 'Dégâts en cours (eau, humidité…)'];
+const DISPO = ['En semaine le matin', "En semaine l'après-midi", 'En semaine après 17 h', 'Le samedi'];
+const TRADE_RX = {plomberie:/plomb|sanitaire|chauffag/i, electricite:/[ée]lec/i, chauffage:/chauff|chaudi|plomb|clim|gaz/i, menuiserie:/menuis|serrur|vitr|volet|[ée]b[ée]nist|store/i, equipement:/[ée]lectrom[ée]nag|[ée]lec|ventil|vmc/i, autre:/ma[çc]on|peint|b[âa]timent|d[ée]sinsect|nuisible/i};
+const proFits = (p, cat) => (TRADE_RX[cat] && TRADE_RX[cat].test(p.trade || '')) || /multi|tous travaux|homme toutes mains|r[ée]novation/i.test(p.trade || '');
 const SLOTS = ['8h – 10h','10h – 12h','12h – 14h','14h – 16h','16h – 18h'];
 const ST = {
   NOUVEAU:'Nouveau signalement', PRECISIONS:'Précisions demandées', A_CHOISIR:'Professionnel à choisir',
@@ -581,8 +598,11 @@ const ACTIONS = {
       const list = ownerPros(me().id);
       if (!list.length){ openModal('Aucun professionnel', `<p>Ajoutez d'abord un professionnel dans l'onglet « Logements » (section « Mes professionnels »).</p>`, null, null, {cancel:'Fermer'}); return; }
       const declined = new Set((d.declined || []).map(x => x.proId));
-      const body = `<p class="muted small">Le professionnel choisi verra ce dossier (description, disponibilités, échanges).</p>${list.map(p => `<label class="choice"><input type="radio" name="pro" value="${esc(p.id)}"><span><b>${esc(p.name)}</b><br><span class="muted small">${esc(p.trade)}${declined.has(p.id) ? ' · a déjà décliné ce dossier' : ''}${isShared() && !p.uid ? ' · pas encore inscrit avec son code' : ''}</span></span></label>`).join('')}<div class="err" data-err="pro"></div>
-        ${fArea('msg', 'Message pour le professionnel', {hint:'Visible uniquement par vous et le professionnel.'})}`;
+      const pre = ui.prePro; ui.prePro = null;
+      list.sort((a, b) => (proFits(b, d.category) ? 1 : 0) - (proFits(a, d.category) ? 1 : 0));
+      const draft = `Bonjour, pouvez-vous intervenir pour : ${d.title}.${d.availability ? ' Disponibilités du locataire : ' + d.availability + '.' : ''} Merci de me faire une proposition dans l'appli.`;
+      const body = `<p class="muted small">Le professionnel choisi verra ce dossier (description, disponibilités, échanges).</p>${list.map(p => `<label class="choice"><input type="radio" name="pro" value="${esc(p.id)}" ${pre === p.id ? 'checked' : ''}><span><b>${esc(p.name)}</b>${proFits(p, d.category) ? ' <span class="badge">Conseillé</span>' : ''}<br><span class="muted small">${esc(p.trade)}${declined.has(p.id) ? ' · a déjà décliné ce dossier' : ''}${isShared() && !p.uid ? ' · pas encore inscrit avec son code' : ''}</span></span></label>`).join('')}<div class="err" data-err="pro"></div>
+        ${fArea('msg', 'Message pour le professionnel', {hint:'Déjà rédigé pour vous, modifiable. Visible uniquement par vous et le professionnel.', value:draft})}`;
       openModal('Transmettre le dossier', body, 'Transmettre', f => {
         if (!f.pro) return {errors:{pro:'Choisissez un professionnel.'}};
         const wasSuivi = d.status === 'SUIVI';
@@ -777,7 +797,7 @@ function dossierCard(d){
   const L = logement(d.logementId), na = nextAction(d), mine = myTurn(d);
   return `<button class="card dcard ${mine ? 'mine' : ''}" data-act="open" data-id="${esc(d.id)}">
     <div class="row1"><span class="title">${esc(d.title)}</span></div>
-    <div class="status-line">${statusBadge(d)}${mine ? '<span class="badge warn">À vous d’agir</span>' : ''}</div>
+    <div class="status-line">${statusBadge(d)}${d.urgent && !CLOSED.includes(d.status) ? '<span class="badge warn">⚠️ Urgent</span>' : ''}${mine ? '<span class="badge warn">À vous d’agir</span>' : ''}</div>
     <div class="muted small">${esc(L ? `${L.name} · ${L.city}` : 'Logement retiré')} · ${esc(CATS[d.category] || '')} · ${esc(d.num)}</div>
     ${na.actor ? `<div class="next ${mine ? 'me' : ''}"><b>Action attendue de : ${esc(actorName(d, na.actor))}</b>${esc(na.text)}</div>` : ''}
     <div class="muted small" style="margin-top:6px">Mis à jour le ${esc(fmtDT(d.updatedAt))}</div></button>`;
@@ -872,9 +892,13 @@ function viewDetail(){
   } else if (!CLOSED.includes(d.status)){
     s += `<p class="muted small">Aucune action de votre part n'est attendue pour le moment.</p>`;
   }
+  if (m.role === 'owner' && ACTIONS.transmit.when(d)){
+    const fit = ownerPros(m.id).filter(p => proFits(p, d.category) && !(d.declined || []).some(x => x.proId === p.id));
+    s += `<div class="sec"><h3>Professionnels conseillés</h3>${fit.length ? `<p class="muted small">Vos professionnels qui correspondent à ce problème (${esc(CATS[d.category] || '')}). Un geste suffit : le dossier lui est envoyé avec un message déjà rédigé, que vous pouvez modifier.</p>${fit.map(p => `<button class="choice" style="width:100%;text-align:left" data-act="quick-transmit" data-id="${esc(d.id)}" data-pro="${esc(p.id)}"><span>🛠️</span><span><b>Envoyer à ${esc(p.name)}</b><br><span class="muted small">${esc(p.trade)}${isShared() && !p.uid ? ' · pas encore inscrit avec son code' : ''}</span></span></button>`).join('')}` : `<p class="muted small">Aucun de vos professionnels ne correspond à « ${esc(CATS[d.category] || '')} ». Ajoutez-en un dans l'onglet « Logements », ou utilisez « Transmettre à un professionnel ».</p>`}</div>`;
+  }
   if (m.role === 'tenant' && !CLOSED.includes(d.status)) s += `<div class="banner urg">${esc(URGENCE)}</div>`;
   // Problème
-  let prob = `<p>${esc(d.description)}</p><dl class="kv"><dt>Logement</dt><dd>${esc(L ? `${L.name} · ${L.city}` : '—')}</dd><dt>Signalé le</dt><dd>${esc(fmtDT(d.createdAt))}</dd><dt>Disponibilités du locataire</dt><dd>${esc(d.availability || 'Non indiquées')}</dd></dl>`;
+  let prob = `<p style="white-space:pre-line">${esc(d.description)}</p><dl class="kv"><dt>Logement</dt><dd>${esc(L ? `${L.name} · ${L.city}` : '—')}</dd><dt>Signalé le</dt><dd>${esc(fmtDT(d.createdAt))}</dd><dt>Disponibilités du locataire</dt><dd>${esc(d.availability || 'Non indiquées')}</dd></dl>`;
   if (d.photo === 'example') prob += `<figure><img class="photo" src="${SHUTTER_SVG}" alt="Illustration fictive d'un volet bloqué"><figcaption>Exemple fictif (pas une vraie photo).</figcaption></figure>`;
   if (memPhotos[d.id]) prob += `<figure><img class="photo" src="${memPhotos[d.id]}" alt="Photo ajoutée"><figcaption>Aperçu local : cette photo n'est pas enregistrée et disparaîtra au rechargement${isShared() ? ' ; les autres participants ne la voient pas' : ''}.</figcaption></figure>`;
   else if (d.photoLost) prob += `<p class="muted small">Une photo avait été ajoutée, mais elle n'est pas conservée dans ce prototype.</p>`;
@@ -962,13 +986,24 @@ function viewReport(){
   if (m.role !== 'tenant') return `<div class="empty">Seul le locataire peut signaler un problème.</div>`;
   const Ls = myLogements();
   if (!Ls.length) return `<h1>Signaler un problème</h1><div class="empty">Aucun logement ne vous est rattaché.</div>`;
-  return `<h1>Signaler un problème</h1><p class="muted">Votre propriétaire recevra la demande dans son tableau de bord.</p>
+  return `<h1>Signaler un problème</h1><p class="muted">Quelques choix suffisent : votre propriétaire reçoit directement une demande claire, sans aller-retour.</p>
   <form data-form="report" novalidate>
     <label class="lab" for="f-log">Logement</label>${Ls.length > 1 ? `<select id="f-log" name="logement">${Ls.map(L => `<option value="${esc(L.id)}">${esc(L.name)} – ${esc(L.city)}</option>`).join('')}</select>` : `<input type="hidden" name="logement" value="${esc(Ls[0].id)}"><div class="card" style="margin:0">${esc(Ls[0].name)} · ${esc(Ls[0].city)}</div>`}
-    <p class="lab">Catégorie</p><div class="chips">${Object.entries(CATS).map(([k, l]) => `<label class="choice"><input type="radio" name="cat" value="${k}"><span>${l}</span></label>`).join('')}</div><div class="err" data-err="cat"></div>
-    ${fText('title', 'Titre', {req:true, max:80, attrs:'placeholder="Ex. : Volet du salon bloqué"'})}
-    ${fArea('desc', 'Description', {req:true, hint:'Que se passe-t-il ? Depuis quand ? Où exactement ?'})}
-    ${fArea('dispo', 'Vos disponibilités', {hint:'Ex. : en semaine après 17 h.'})}
+    <p class="lab">1. Quel type de problème ?</p><div class="chips">${Object.entries(CATS).map(([k, l]) => `<label class="choice"><input type="radio" name="cat" value="${k}" data-guided="cat"><span>${CAT_ICON[k]} ${l}</span></label>`).join('')}</div><div class="err" data-err="cat"></div>
+    <div id="g-prob" hidden><p class="lab">2. Choisissez le problème</p><div id="g-prob-list"></div><div class="err" data-err="prob"></div></div>
+    <div id="g-danger" hidden></div>
+    <div id="g-preset" hidden>
+      <p class="lab">3. Où ?</p><div class="chips">${ROOMS.map(r => `<label class="choice"><input type="radio" name="room" value="${esc(r)}"><span>${esc(r)}</span></label>`).join('')}</div>
+      <p class="lab">Depuis quand ?</p>${SINCE.map(r => `<label class="choice"><input type="radio" name="since" value="${esc(r)}"><span>${esc(r)}</span></label>`).join('')}
+      <p class="lab">Est-ce gênant ?</p>${IMPACT.map(r => `<label class="choice"><input type="radio" name="impact" value="${esc(r)}"><span>${esc(r)}</span></label>`).join('')}
+      ${fArea('more', 'Un détail à ajouter ?', {hint:'Facultatif : marque de l’appareil, ce que vous avez déjà essayé…'})}
+    </div>
+    <div id="g-custom" hidden>
+      ${fText('title', 'Titre', {req:true, max:80, attrs:'placeholder="Ex. : Volet du salon bloqué"'})}
+      ${fArea('desc', 'Description', {req:true, hint:'Que se passe-t-il ? Depuis quand ? Où exactement ?'})}
+    </div>
+    <p class="lab">Quand êtes-vous disponible pour l'intervention ?</p><div class="chips">${DISPO.map(r => `<label class="choice"><input type="checkbox" name="dchip" value="${esc(r)}"><span>${esc(r)}</span></label>`).join('')}</div>
+    ${fText('dispo', 'Autre précision sur vos disponibilités', {max:160, attrs:'placeholder="Ex. : pas le mercredi"'})}
     <label class="lab" for="f-photo">Photo <span class="muted small">(facultatif)</span></label><div class="hint">Aperçu local seulement : la photo n'est pas enregistrée et disparaît au rechargement${isShared() ? ', et les autres ne la voient pas' : ''}.</div>
     <input type="file" id="f-photo" accept="image/*" data-photo="1" style="max-width:100%"><div id="photo-prev"></div>
     <div class="banner urg" style="margin-top:16px"><b>Avant d'envoyer :</b> ${esc(URGENCE)} En cas de fuite de gaz, d'odeur de brûlé ou de risque électrique, n'attendez pas de réponse dans l'appli.</div>
@@ -1084,10 +1119,10 @@ function viewGuide(){
   <div class="sec"><h3>Tester un dossier de bout en bout (démo, 5 minutes)</h3>
   <p class="muted small">Changez de rôle avec le bouton en haut à droite « Vous testez · changer ».</p>
   <ol class="steps">
-   <li><b>Locataire Julien</b> : Signaler → Menuiserie → « Volet du salon bloqué » → Envoyer. (Un exemple déjà prêt existe aussi : « Volet roulant du salon bloqué ».)</li>
+   <li><b>Locataire Julien</b> : Signaler → Menuiserie → « Volet roulant bloqué » → Salon → vos disponibilités → Envoyer. Pas besoin de rédiger : la demande est composée pour vous. (Un exemple déjà prêt existe aussi : « Volet roulant du salon bloqué ».)</li>
    <li><b>Propriétaire Claire</b> : ouvrez le dossier → « Demander une précision » (facultatif).</li>
    <li><b>Julien</b> : « Répondre à la question ».</li>
-   <li><b>Claire</b> : « Transmettre à un professionnel » → Menuiserie Lefèvre.</li>
+   <li><b>Claire</b> : dans « Professionnels conseillés », touchez « Envoyer à Menuiserie Lefèvre » (le message est déjà rédigé).</li>
    <li><b>Menuiserie Lefèvre</b> : « Accepter la demande » puis « Envoyer une proposition » (ex. 160 €).</li>
    <li><b>Claire</b> : « Accepter la proposition ».</li>
    <li><b>Menuiserie Lefèvre</b> : « Proposer un rendez-vous » (date à partir de demain).</li>
@@ -1220,6 +1255,11 @@ document.addEventListener('click', async ev => {
     render(); toast('Vous testez maintenant : ' + (me().role === 'pro' ? proName(me().proId) : me().name) + ' (' + ROLE_WORD[me().role] + ').');
     return;
   }
+  if (act === 'quick-transmit'){
+    const d = getD(t.dataset.id);
+    if (!d || !ACTIONS.transmit.when(d) || me().role !== 'owner'){ toast('Cette action n’est plus possible : le dossier a changé.', true); render(); return; }
+    ui.prePro = t.dataset.pro; ACTIONS.transmit.open(d); return;
+  }
   if (act === 'action'){
     const d = getD(t.dataset.id); const a = ACTIONS[t.dataset.a];
     if (!d || !a || !a.when(d) || a.role !== me().role){ toast('Cette action n’est plus possible : le dossier a changé.', true); render(); return; }
@@ -1300,8 +1340,24 @@ async function markRead(list){
   if (isShared()){ try { await q(SH.sb.from('rl_notifs').update({read:true}).in('id', list.map(n => n.id))); } catch(e){} list.forEach(n => n.read = true); }
   else { list.forEach(n => n.read = true); saveDemo(); }
 }
+function guidedProb(form){
+  const cat = (form.querySelector('input[name=cat]:checked') || {}).value, pv = (form.querySelector('input[name=prob]:checked') || {}).value;
+  return {cat, pv, item:cat && pv && pv !== 'autre' ? PROBS[cat][+pv] : null};
+}
 document.addEventListener('change', ev => {
   const t = ev.target;
+  if (t.dataset.guided === 'cat'){
+    const box = $('#g-prob-list');
+    box.innerHTML = PROBS[t.value].map((p, i) => `<label class="choice"><input type="radio" name="prob" value="${i}" data-guided="prob"><span>${p.danger ? '⚠️ ' : ''}${esc(p.t)}</span></label>`).join('') + `<label class="choice"><input type="radio" name="prob" value="autre" data-guided="prob"><span>✏️ <b>Autre problème</b> : je le décris moi-même</span></label>`;
+    $('#g-prob').hidden = false; $('#g-preset').hidden = true; $('#g-custom').hidden = true; $('#g-danger').hidden = true;
+    setTimeout(() => $('#g-prob').scrollIntoView({block:'start', behavior:'smooth'}), 30);
+  }
+  if (t.dataset.guided === 'prob'){
+    const g = guidedProb(t.form);
+    $('#g-preset').hidden = !g.item; $('#g-custom').hidden = !!g.item;
+    const dg = $('#g-danger'); dg.hidden = !(g.item && g.item.danger);
+    dg.innerHTML = g.item && g.item.danger ? `<div class="banner err" style="margin-top:12px"><b>Urgence, à faire tout de suite :</b> ${esc(g.item.danger)}<br>Vous pouvez ensuite envoyer ce signalement pour informer votre propriétaire, mais n'attendez pas sa réponse.</div>` : '';
+  }
   if (t.dataset.filter === 'logement'){ ui.f.logement = t.value; render(); }
   if (t.dataset.filter === 'mine'){ ui.f.mine = t.checked; render(); }
   if (t.dataset.photo){
@@ -1341,15 +1397,25 @@ document.addEventListener('submit', async ev => {
   }
   if (form.dataset.form === 'report'){
     const errors = {};
+    const g = guidedProb(form);
     if (!f.cat) errors.cat = 'Choisissez une catégorie.';
-    if (tooShort(f.title, 5)) errors.title = 'Donnez un titre (5 caractères minimum).';
-    if (tooShort(f.desc, 15)) errors.desc = 'Décrivez le problème (15 caractères minimum).';
+    else if (!g.pv) errors.prob = 'Choisissez le problème, ou « Autre problème ».';
+    if (g.pv === 'autre'){
+      if (tooShort(f.title, 5)) errors.title = 'Donnez un titre (5 caractères minimum).';
+      if (tooShort(f.desc, 15)) errors.desc = 'Décrivez le problème (15 caractères minimum).';
+    }
+    if (g.item){
+      f.title = g.item.t + (f.room ? ' – ' + f.room : '');
+      f.desc = [g.item.t + '.', f.room && 'Où : ' + f.room + '.', f.since && 'Depuis : ' + f.since.toLowerCase() + '.', f.impact && 'Gêne : ' + f.impact.toLowerCase() + '.', f.more && f.more.trim() && 'Précisions : ' + f.more.trim()].filter(Boolean).join('\n');
+    }
+    const chips = [...form.querySelectorAll('input[name=dchip]:checked')].map(x => x.value);
+    f.dispo = [chips.join(', '), (f.dispo || '').trim()].filter(Boolean).join('. ');
     if (!f.logement || !myLogements().some(L => L.id === f.logement)) errors._ = 'Logement non valide.';
     if (Object.keys(errors).length){ showErrors(form, errors); return; }
     const now = Date.now();
     const id = 'd' + newId();
     const num = isShared() ? 'RL-' + now.toString(36).slice(-5).toUpperCase() : 'RL-' + String(DEMO.seq++).padStart(4, '0');
-    const d = {id, num, logementId:f.logement, category:f.cat, title:f.title.trim(), description:f.desc.trim(), availability:(f.dispo || '').trim(), status:'NOUVEAU',
+    const d = {id, num, logementId:f.logement, category:f.cat, title:f.title.trim(), description:f.desc.trim(), availability:(f.dispo || '').trim(), urgent:!!(g.item && g.item.danger), status:'NOUVEAU',
       qa:[], quote:null, quoteHistory:[], appointment:null, apptHistory:[], report:null, feedback:null, followUp:null, closure:null, past:[], declined:[], messages:[], history:[], proId:null, accepted:false, photo:null, photoLost:!!pendingPhoto, createdAt:now, updatedAt:now};
     const res = await run(() => commit(d, 'Signalement créé', ['owner'], 'Nouveau signalement'));
     if (res && res.errors){ showErrors(form, res.errors); return; }
