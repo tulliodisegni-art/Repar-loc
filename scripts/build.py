@@ -16,6 +16,7 @@ head = """<link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <script>window.REPARLOC_PWA=true;window.RL_CFG={url:"https://vvxkkqcmjrwytagbxdfg.supabase.co",key:"sb_publishable_A-kJQIoJXxdXmjHF8iM40g_RP6myhMo",link:"https://tulliodisegni-art.github.io/Repar-loc/"};</script>
 <script src="vendor/supabase.js"></script>
+<script src="vendor/qrcode.js"></script>
 <script>if("serviceWorker" in navigator)window.addEventListener("load",function(){navigator.serviceWorker.register("sw.js").catch(function(){})});</script>
 """
 marker = '<meta name="theme-color" content="#1f5a3d">'
