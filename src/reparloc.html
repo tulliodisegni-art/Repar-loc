@@ -368,7 +368,7 @@ async function reloadShared(){
   SH.dossiers = dos.map(r => {
     const d = mergeScopes(r.data, lpm.get(r.id), ppm.get(r.id));
     d.id = r.id; d.logementId = r.logement_id; d.proId = r.pro_id;
-    d.messages = msgs.filter(m => m.dossier_id === r.id).map(m => ({id:m.id, ch:m.ch, by:m.author || (m.pro_id ? 'pro:' + m.pro_id : null), text:m.text, at:Date.parse(m.created_at)}));
+    d.messages = msgs.filter(m => m.dossier_id === r.id).map(m => ({id:m.id, ch:m.ch, by:m.pro_id ? 'pro:' + m.pro_id : m.author, text:m.text, at:Date.parse(m.created_at)}));
     return d;
   });
   SH.notifs = notifs.map(n => ({id:n.id, to:n.to_user, dossierId:n.dossier_id, text:n.text, at:Date.parse(n.created_at), read:n.read}));

@@ -3,7 +3,7 @@
 //  - POST {token, action, …}                                   → lien de réponse du professionnel, sans compte
 // Le lien (table rl_pro_links) est créé par le propriétaire et ne vaut que pour un dossier et un professionnel,
 // tant que ce professionnel est celui choisi pour le dossier. Le professionnel ne voit que sa part du dossier
-// (comme dans l'appli) et n'écrit qu'au propriétaire.
+// (comme dans l'appli) et n'écrit qu'au propriétaire. Ses messages sont rangés avec pro_id (author = propriétaire, seul compte du fil).
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
@@ -95,7 +95,7 @@ async function view(c: Ctx) {
     quote: q ? { version: q.version, description: q.description, amount: q.amount, status: q.status, ownerComment: q.ownerComment || "" } : null,
     appointment: d.appointment || null, report: d.report || null,
     feedback: d.feedback ? { resolved: !!d.feedback.resolved } : null,
-    messages: (msgs || []).map((m: Any) => ({ mine: !m.author ? m.pro_id === c.P.id : m.author === c.P.user_id, text: m.text, at: Date.parse(m.created_at) })),
+    messages: (msgs || []).map((m: Any) => ({ mine: m.pro_id ? m.pro_id === c.P.id : m.author === c.P.user_id, text: m.text, at: Date.parse(m.created_at) })),
     media, next: nextText(c), slots: SLOTS,
   };
 }
@@ -122,7 +122,7 @@ async function act(c: Ctx, action: string, b: Any) {
   if (action === "message") {
     const text = str(b.text, 1500);
     if (!text) throw new Oops("message_vide");
-    const r = await sb.from("rl_messages").insert({ dossier_id: c.row.id, ch: "pp", author: null, pro_id: c.P.id, text });
+    const r = await sb.from("rl_messages").insert({ dossier_id: c.row.id, ch: "pp", author: c.L.owner_id, pro_id: c.P.id, text });
     if (r.error) throw r.error;
     await notify(["owner"], "Nouveau message");
     return;
