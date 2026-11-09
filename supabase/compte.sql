@@ -1,9 +1,6 @@
 -- Répar'Loc : suppression des données Répar'Loc d'un compte (Menu → Confidentialité → Supprimer mon compte).
 -- Le compte de connexion (e-mail) est commun à d'autres applis du même projet Supabase : il n'est pas supprimé ici.
--- Appliqué comme migration « reparloc_compte ».
-
--- messages écrits depuis le lien de réponse du professionnel : pas d'auteur connecté
-alter table public.rl_messages alter column author drop not null;
+-- À appliquer depuis l'éditeur SQL de Supabase (contient des suppressions : confirmation requise).
 
 create or replace function public.rl_delete_my_data() returns void language plpgsql security definer set search_path = '' as $function$
 declare me uuid := auth.uid();
