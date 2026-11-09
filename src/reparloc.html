@@ -296,6 +296,7 @@ function sbErr(e){
   if (/Failed to fetch|NetworkError|network/i.test(m)) return 'Pas de connexion internet. Réessayez dans un instant.';
   if (/row-level security|violates|permission denied/i.test(m)) return "Cette action n'est pas autorisée pour votre compte.";
   if (/seul_le_proprietaire/.test(m)) return 'Seul le propriétaire peut choisir le professionnel.';
+  if (/etape_non_autorisee/.test(m)) return "Le dossier a changé entre-temps, ou cette étape ne vous revient pas. L'écran vient d'être actualisé.";
   if (/Invalid login credentials/i.test(m)) return 'E-mail ou mot de passe incorrect.';
   if (/Email not confirmed/i.test(m)) return "Confirmez d'abord votre adresse avec le lien reçu par e-mail.";
   if (/already registered|already been registered/i.test(m)) return 'Un compte existe déjà avec cet e-mail : connectez-vous.';
@@ -320,6 +321,7 @@ async function afterLogin(user){
   SH.uid = user.id; SH.email = user.email || '';
   try { const r = await SH.sb.rpc('rl_is_admin'); SH.admin = !r.error && r.data === true; } catch(e){ SH.admin = false; }
   await reloadShared();
+  pushCheck();
   if (!SH.timer) SH.timer = setInterval(() => {
     if (isShared() && document.visibilityState === 'visible' && SH.status === 'ready' && !$('#modal-form') && !isTyping() && ui.view !== 'signaler') reloadShared().catch(() => {});
   }, 20000);
@@ -366,7 +368,7 @@ async function reloadShared(){
   SH.dossiers = dos.map(r => {
     const d = mergeScopes(r.data, lpm.get(r.id), ppm.get(r.id));
     d.id = r.id; d.logementId = r.logement_id; d.proId = r.pro_id;
-    d.messages = msgs.filter(m => m.dossier_id === r.id).map(m => ({id:m.id, ch:m.ch, by:m.author, text:m.text, at:Date.parse(m.created_at)}));
+    d.messages = msgs.filter(m => m.dossier_id === r.id).map(m => ({id:m.id, ch:m.ch, by:m.author || (m.pro_id ? 'pro:' + m.pro_id : null), text:m.text, at:Date.parse(m.created_at)}));
     return d;
   });
   SH.notifs = notifs.map(n => ({id:n.id, to:n.to_user, dossierId:n.dossier_id, text:n.text, at:Date.parse(n.created_at), read:n.read}));
@@ -407,6 +409,7 @@ function logement(id){ return DATA().logements.find(l => l.id === id); }
 function pro(id){ return DATA().pros.find(p => p.id === id); }
 function proName(id){ const p = pro(id); return p ? p.name : 'Professionnel retiré'; }
 function personLabel(id){
+  if (typeof id === 'string' && id.startsWith('pro:')) return `${proName(id.slice(4))} (professionnel, via son lien)`;
   const p = person(id); if (!p) return 'Personne inconnue';
   if (p.role === 'pro'){ const pr = pro(p.proId); return `${pr ? pr.name : p.name} (professionnel)`; }
   return `${p.name} (${ROLE_WORD[p.role]})`;
@@ -441,7 +444,7 @@ function getD(id){ const d = DATA().dossiers.find(x => x.id === id); return d ? 
 function pendingQA(d){ return (d.qa || []).slice().reverse().find(q => !q.answer); }
 /* Conversations séparées : lp = locataire ↔ propriétaire, pp = propriétaire ↔ professionnel. */
 function canSeeCh(ch){ const m = me(); if (!m || !ch) return !!m; if (m.role === 'owner') return true; if (m.role === 'tenant') return ch === 'lp'; if (m.role === 'pro') return ch === 'pp'; return false; }
-function msgCh(x){ if (x.ch) return x.ch; const p = person(x.by); return p && p.role === 'pro' ? 'pp' : 'lp'; }
+function msgCh(x){ if (x.ch) return x.ch; if (typeof x.by === 'string' && x.by.startsWith('pro:')) return 'pp'; const p = person(x.by); return p && p.role === 'pro' ? 'pp' : 'lp'; }
 function nextAction(d){
   const q = d.quote, a = d.appointment;
   switch (d.status){
@@ -703,15 +706,17 @@ const ACTIONS = {
       const pre = ui.prePro; ui.prePro = null;
       list.sort((a, b) => (proFits(b, d.category) ? 1 : 0) - (proFits(a, d.category) ? 1 : 0));
       const draft = `Bonjour, pouvez-vous intervenir pour : ${d.title}.${d.availability ? ' Disponibilités du locataire : ' + d.availability + '.' : ''} Merci de me faire une proposition dans l'appli.`;
-      const body = `<p class="muted small">Le professionnel choisi verra ce dossier (description, disponibilités, échanges).</p>${list.map(p => `<label class="choice"><input type="radio" name="pro" value="${esc(p.id)}" ${pre === p.id ? 'checked' : ''}><span><b>${esc(p.name)}</b>${proFits(p, d.category) ? ' <span class="badge">Conseillé</span>' : ''}<br><span class="muted small">${esc(p.trade)}${declined.has(p.id) ? ' · a déjà décliné ce dossier' : ''}${isShared() && !p.uid ? ' · pas encore inscrit avec son code' : ''}</span></span></label>`).join('')}<div class="err" data-err="pro"></div>
+      const body = `<p class="muted small">Le professionnel choisi verra ce dossier (description, disponibilités, échanges).</p>${list.map(p => `<label class="choice"><input type="radio" name="pro" value="${esc(p.id)}" ${pre === p.id ? 'checked' : ''}><span><b>${esc(p.name)}</b>${proFits(p, d.category) ? ' <span class="badge">Conseillé</span>' : ''}<br><span class="muted small">${esc(p.trade)}${declined.has(p.id) ? ' · a déjà décliné ce dossier' : ''}${isShared() && !p.uid ? ' · sans compte : vous lui enverrez un lien' : ''}</span></span></label>`).join('')}<div class="err" data-err="pro"></div>
         ${fArea('msg', 'Message pour le professionnel', {hint:'Déjà rédigé pour vous, modifiable. Visible uniquement par vous et le professionnel.', value:draft})}`;
-      openModal('Transmettre le dossier', body, 'Transmettre', f => {
+      openModal('Transmettre le dossier', body, 'Transmettre', async f => {
         if (!f.pro) return {errors:{pro:'Choisissez un professionnel.'}};
         const wasSuivi = d.status === 'SUIVI';
         archiveCycle(d);
         d.proId = f.pro; d.accepted = false; d.status = 'ATTENTE_PRO';
         if (f.msg && f.msg.trim()) d.messages.push({id:newId(), ch:'pp', by:me().id, text:f.msg.trim(), at:Date.now()});
-        return commit(d, `${wasSuivi ? 'Suite transmise' : 'Dossier transmis'} à ${proName(f.pro)}`, ['pro','tenant'], 'Dossier transmis');
+        const res = await commit(d, `${wasSuivi ? 'Suite transmise' : 'Dossier transmis'} à ${proName(f.pro)}`, ['pro','tenant'], 'Dossier transmis');
+        if (!res && isShared() && !(pro(f.pro) || {}).uid) setTimeout(() => openProLink(d.id), 120);
+        return res;
       });
     }},
   quoteAccept:{role:'owner', label:'Accepter la proposition', primary:true, when:d => d.status === 'PROPOSITION' && d.quote,
@@ -858,16 +863,18 @@ function unread(){ const m = me(); if (!m) return 0; return DATA().notifs.filter
 function render(){
   const app = $('#app');
   const m = me();
+  if (ui.link){ app.innerHTML = `<header class="top"><div class="top-in"><div class="brand">${logo()}<div class="brand-t"><b>Répar'Loc</b><small>Espace professionnel</small></div></div></div></header><main class="wrap">${viewLink()}</main>`; return; }
   let main = '';
   if (!PREFS.welcomed && ui.view === 'home') main = viewWelcome();
   else if (isShared() && (SH.status !== 'ready' || !SH.me) && !(ui.view === 'admin' && SH.admin)) main = viewSharedGate();
   else {
-    const V = {home:viewHome, dossiers:viewList, dossier:viewDetail, rdv:viewRdv, logements:viewLogements, signaler:viewReport, notifs:viewNotifs, menu:viewMenu, guide:viewGuide, admin:viewAdmin}[ui.view] || viewHome;
+    const V = {home:viewHome, dossiers:viewList, dossier:viewDetail, rdv:viewRdv, logements:viewLogements, signaler:viewReport, notifs:viewNotifs, menu:viewMenu, guide:viewGuide, admin:viewAdmin, privacy:viewPrivacy, carnet:viewCarnet}[ui.view] || viewHome;
     main = V();
   }
   const sharedReady = !isShared() || (SH.status === 'ready' && SH.me);
   const welcoming = !PREFS.welcomed && ui.view === 'home';
   app.innerHTML = `${header()}<main class="wrap">${welcoming ? '' : banners()}${main}</main>${welcoming ? '' : (sharedReady ? nav() : navMin())}`;
+  if (ui.pending && sharedReady && PREFS.welcomed) setTimeout(applyPending, 0);
 }
 function header(){
   const m = me();
@@ -878,7 +885,7 @@ function header(){
 }
 function banners(){
   let s = isShared()
-    ? `<div class="banner shared">Version de test : chacun ne voit que ses propres dossiers. Aucun e-mail ni SMS n'est envoyé. Évitez les informations sensibles.</div>`
+    ? `<div class="banner shared">Version de test : chacun ne voit que ses propres dossiers. Évitez les informations sensibles.</div>`
     : `<div class="banner demo">${esc(DEMO_TXT)}</div>`;
   if (!isShared() && !storageOk) s += `<div class="banner err">La sauvegarde locale n'est pas disponible dans ce navigateur : vos changements seront perdus au rechargement.</div>`;
   return s;
@@ -890,7 +897,7 @@ function nav(){
   else if (m.role === 'tenant') items.push(['signaler','plus','Signaler']);
   else items.push(['notifs','bell','Alertes']);
   items.push(['menu','menu','Menu']);
-  const cur = ui.view === 'dossier' ? 'dossiers' : (['guide','admin'].includes(ui.view) ? 'menu' : ui.view);
+  const cur = ui.view === 'dossier' ? 'dossiers' : ui.view === 'carnet' ? 'logements' : (['guide','admin','privacy'].includes(ui.view) ? 'menu' : ui.view);
   return `<nav class="nav" aria-label="Navigation principale"><div class="nav-in">${items.map(([v, i, l]) => `<button data-act="go" data-view="${v}" ${cur === v ? 'aria-current="page"' : ''}>${ico(i)}<span>${l}</span>${v === 'home' && n ? `<span class="dot">${n}</span>` : ''}${v === 'notifs' && n ? `<span class="dot">${n}</span>` : ''}</button>`).join('')}</div></nav>`;
 }
 function navMin(){ return `<nav class="nav"><div class="nav-in" style="grid-template-columns:1fr 1fr"><button data-act="mode" data-mode="demo">${ico('home')}<span>Revenir à la démo</span></button><button data-act="go" data-view="guide">${ico('menu')}<span>Guide</span></button></div></nav>`; }
@@ -916,6 +923,7 @@ function apptLine(d){
 }
 
 function viewWelcome(){
+  if (!ui.wRole && ui.pending && ui.pending.signaler) ui.wRole = 'tenant';
   const r = ui.wRole;
   const card = (k, ic, cls, title, txt) => `<button class="rolecard" style="width:100%;cursor:pointer;${r === k ? 'border-color:#1f5a3d;box-shadow:0 0 0 2px #cfe5d8' : ''}" data-act="w-role" data-role="${k}"><div class="ic ${cls}">${ic}</div><div><b>${title}</b><br><span class="muted">${txt}</span></div></button>`;
   let s = `<div class="welcome">${logo('big')}<h1>Bienvenue sur Répar'Loc</h1><p class="tag">Signaler, autoriser, organiser et suivre une réparation au même endroit.</p></div>
@@ -945,13 +953,17 @@ function viewHome(){
     : (mine.length ? `${mine.length} demande${mine.length > 1 ? 's' : ''} à traiter.` : 'Aucune demande en attente pour vous.');
   let s = `<div class="hero">${logo()}<div><h1>${hello} ${esc(first)}</h1><p>${esc(sub)}</p></div></div>`;
   if (!PREFS.guideSeen) s += `<div class="card"><h3>Première visite ?</h3><p>Le guide explique en 2 minutes comment tester un dossier de bout en bout.</p><div class="btns"><button class="btn primary block" data-act="go" data-view="guide">Lire le guide</button><button class="btn ghost block" data-act="guide-hide">Masquer ce message</button></div></div>`;
+  if (isShared()){
+    if (PUSH.state === '?') pushCheck();
+    else if (PUSH.state === 'off' && !PREFS.pushHide) s += `<div class="card"><h3>🔔 Être prévenu sur ce téléphone</h3><p class="small">Une alerte dès qu'un dossier bouge : nouvelle demande, proposition, rendez-vous, message.</p><div class="btns"><button class="btn primary block" data-act="push-on">Activer les notifications</button><button class="btn ghost block" data-act="push-hide">Plus tard</button></div></div>`;
+  }
   if (m.role === 'tenant'){
     const Ls = myLogements();
     s += Ls.length ? Ls.map(L => `<div class="card"><div class="muted small">Mon logement</div><h3>${esc(L.name)}</h3><div class="muted">${esc(L.city)} · propriétaire : ${esc(personLabel(L.ownerId))}</div></div>`).join('') : `<div class="empty">Aucun logement ne vous est rattaché pour le moment.</div>`;
     if (Ls.length) s += `<button class="btn primary block" data-act="go" data-view="signaler">Signaler un problème</button>`;
     s += `<div class="banner urg">${esc(URGENCE)}</div>`;
   }
-  if (n) s += `<button class="card dcard" data-act="go" data-view="notifs"><b>${n} notification${n > 1 ? 's' : ''} non lue${n > 1 ? 's' : ''}</b><div class="muted small">Notifications affichées dans l'appli uniquement (simulées).</div></button>`;
+  if (n) s += `<button class="card dcard" data-act="go" data-view="notifs"><b>${n} notification${n > 1 ? 's' : ''} non lue${n > 1 ? 's' : ''}</b><div class="muted small">Voir les nouveautés de vos dossiers</div></button>`;
   s += `<h2>Actions attendues de vous (${mine.length})</h2>`;
   s += mine.length ? mine.map(dossierCard).join('') : `<div class="empty">Rien à faire pour l'instant. ${m.role === 'tenant' ? 'Vous pouvez signaler un nouveau problème.' : 'Vous serez prévenu ici dès qu’une action vous attend.'}</div>`;
   s += `<h2>Prochains rendez-vous</h2>`;
@@ -996,8 +1008,9 @@ function viewDetail(){
   }
   if (m.role === 'owner' && ACTIONS.transmit.when(d)){
     const fit = ownerPros(m.id).filter(p => proFits(p, d.category) && !(d.declined || []).some(x => x.proId === p.id));
-    s += `<div class="sec"><h3>Professionnels conseillés</h3>${fit.length ? `<p class="muted small">Vos professionnels qui correspondent à ce problème (${esc(CATS[d.category] || '')}). Un geste suffit : le dossier lui est envoyé avec un message déjà rédigé, que vous pouvez modifier.</p>${fit.map(p => `<button class="choice" style="width:100%;text-align:left" data-act="quick-transmit" data-id="${esc(d.id)}" data-pro="${esc(p.id)}"><span>🛠️</span><span><b>Envoyer à ${esc(p.name)}</b><br><span class="muted small">${esc(p.trade)}${isShared() && !p.uid ? ' · pas encore inscrit avec son code' : ''}</span></span></button>`).join('')}` : `<p class="muted small">Aucun de vos professionnels ne correspond à « ${esc(CATS[d.category] || '')} ». Ajoutez celui que vous connaissez, ou utilisez « Transmettre à un professionnel ».</p>`}<button class="btn block" data-act="add-pro" data-d="${esc(d.id)}" data-cat="${esc(d.category)}">➕ Ajouter mon propre professionnel</button></div>`;
+    s += `<div class="sec"><h3>Professionnels conseillés</h3>${fit.length ? `<p class="muted small">Vos professionnels qui correspondent à ce problème (${esc(CATS[d.category] || '')}). Un geste suffit : le dossier lui est envoyé avec un message déjà rédigé, que vous pouvez modifier.</p>${fit.map(p => `<button class="choice" style="width:100%;text-align:left" data-act="quick-transmit" data-id="${esc(d.id)}" data-pro="${esc(p.id)}"><span>🛠️</span><span><b>Envoyer à ${esc(p.name)}</b><br><span class="muted small">${esc(p.trade)}${isShared() && !p.uid ? ' · sans compte : vous lui enverrez un lien' : ''}</span></span></button>`).join('')}` : `<p class="muted small">Aucun de vos professionnels ne correspond à « ${esc(CATS[d.category] || '')} ». Ajoutez celui que vous connaissez, ou utilisez « Transmettre à un professionnel ».</p>`}<button class="btn block" data-act="add-pro" data-d="${esc(d.id)}" data-cat="${esc(d.category)}">➕ Ajouter mon propre professionnel</button></div>`;
   }
+  s += proLinkSection(d);
   if (m.role === 'tenant' && !CLOSED.includes(d.status)) s += `<div class="banner urg">${esc(URGENCE)}</div>`;
   // Problème
   let prob = `<p style="white-space:pre-line">${esc(d.description)}</p><dl class="kv"><dt>Logement</dt><dd>${esc(L ? `${L.name} · ${L.city}` : '—')}</dd><dt>Signalé le</dt><dd>${esc(fmtDT(d.createdAt))}</dd><dt>Disponibilités du locataire</dt><dd>${esc(d.availability || 'Non indiquées')}</dd></dl>`;
@@ -1023,7 +1036,7 @@ function viewDetail(){
   if (d.appointment){
     const a = d.appointment;
     const lab = {'proposé':'<span class="badge warn">Proposé, à confirmer par le locataire</span>', 'confirmé':'<span class="badge">Confirmé par le locataire</span>', 'refusé':'<span class="badge danger">Refusé par le locataire</span>', 'à reprogrammer':'<span class="badge info">À reprogrammer</span>'}[a.status] || '';
-    let inner = `<p style="text-transform:capitalize"><b>${esc(fmtDay(a.date))}</b></p><p>Créneau : ${esc(a.slot)}</p><div class="status-line">${lab}</div>${a.tenantComment ? `<p class="small">Message du locataire : « ${esc(a.tenantComment)} »</p>` : ''}`;
+    let inner = `<p style="text-transform:capitalize"><b>${esc(fmtDay(a.date))}</b></p><p>Créneau : ${esc(a.slot)}</p><div class="status-line">${lab}</div>${a.tenantComment ? `<p class="small">Message du locataire : « ${esc(a.tenantComment)} »</p>` : ''}${calBtn(d)}`;
     if ((d.apptHistory || []).length) inner += `<details><summary>Propositions précédentes (${d.apptHistory.length})</summary>${d.apptHistory.map(o => `<p class="small">${esc(fmtDay(o.date))}, ${esc(o.slot)} · ${esc(o.status)}</p>`).join('')}</details>`;
     s += section('Rendez-vous', inner);
   }
@@ -1037,7 +1050,7 @@ function viewDetail(){
   const convo = (ch, title, who) => {
     let html = (d.messages || []).filter(x => msgCh(x) === ch).map(x => `<div class="msg ${x.by === m.id ? 'me' : ''}"><div class="meta">${esc(x.by === m.id ? 'Vous' : personLabel(x.by))} · ${esc(fmtDT(x.at))}</div>${esc(x.text)}</div>`).join('') || '<p class="muted">Aucun message pour le moment.</p>';
     if (!CLOSED.includes(d.status)) html += `<form data-form="msg" data-id="${esc(d.id)}" data-ch="${ch}" novalidate><label class="lab" for="f-msg-${ch}">Écrire ${esc(who)}</label><textarea id="f-msg-${ch}" name="text" maxlength="1500" placeholder="Votre message"></textarea><div class="err" data-err="text"></div><button class="btn primary block" style="margin-top:8px" type="submit">Envoyer le message</button></form>`;
-    return section(title, `<p class="muted small">${ch === 'lp' ? 'Visible uniquement par le locataire et le propriétaire.' : 'Visible uniquement par le propriétaire et le professionnel.'} ${isShared() ? 'Aucune notification par e-mail ou SMS.' : 'Enregistré sur ce téléphone uniquement.'}</p>${html}`);
+    return section(title, `<p class="muted small">${ch === 'lp' ? 'Visible uniquement par le locataire et le propriétaire.' : 'Visible uniquement par le propriétaire et le professionnel.'} ${isShared() ? '' : 'Enregistré sur ce téléphone uniquement.'}</p>${html}`);
   };
   if (m.role === 'owner'){
     s += convo('lp', 'Conversation avec le locataire', 'au locataire');
@@ -1075,7 +1088,7 @@ function viewLogements(){
         : L.inviteCode ? codeBox(L.inviteCode, 'pour votre locataire')
         : `<button class="btn block" data-act="new-code" data-kind="tenant" data-id="${esc(L.id)}">Créer un code pour le locataire</button>`;
     } else extra = `<p class="small">Locataire : ${esc(personLabel(L.tenantId))}</p>`;
-    return `<div class="card"><h3>${esc(L.name)}</h3><div class="muted">${esc(L.city)}</div><p><b>${open}</b> dossier${open > 1 ? 's' : ''} ouvert${open > 1 ? 's' : ''}</p>${extra}<div class="btns"><button class="btn primary block" data-act="list-log" data-id="${esc(L.id)}">Voir les dossiers de ce logement</button></div></div>`;
+    return `<div class="card"><h3>${esc(L.name)}</h3><div class="muted">${esc(L.city)}</div><p><b>${open}</b> dossier${open > 1 ? 's' : ''} ouvert${open > 1 ? 's' : ''}</p>${extra}<div class="btns"><button class="btn primary block" data-act="list-log" data-id="${esc(L.id)}">Voir les dossiers de ce logement</button><div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn ghost" data-act="carnet" data-id="${esc(L.id)}">📄 Carnet</button>${window.qrcode ? `<button class="btn ghost" data-act="qr" data-id="${esc(L.id)}">▦ QR code</button>` : ''}</div></div></div>`;
   }).join('') : `<div class="empty">Aucun logement. ${isShared() ? 'Ajoutez votre premier logement : un code sera créé pour inviter votre locataire.' : ''}</div>`;
   if (isShared()) s += `<button class="btn primary block" data-act="add-logement">Ajouter un logement</button>`;
   s += `<h2>Mes professionnels</h2><p class="muted small">Ajoutez les professionnels que vous connaissez déjà : l'appli vous les proposera quand un problème correspond à leur métier. Elle ne garantit pas leur disponibilité.</p>`;
@@ -1091,7 +1104,7 @@ function viewReport(){
   if (!Ls.length) return `<h1>Signaler un problème</h1><div class="empty">Aucun logement ne vous est rattaché.</div>`;
   return `<h1>Signaler un problème</h1><p class="muted">Quelques choix suffisent : votre propriétaire reçoit directement une demande claire, sans aller-retour.</p>
   <form data-form="report" novalidate>
-    <label class="lab" for="f-log">Logement</label>${Ls.length > 1 ? `<select id="f-log" name="logement">${Ls.map(L => `<option value="${esc(L.id)}">${esc(L.name)} – ${esc(L.city)}</option>`).join('')}</select>` : `<input type="hidden" name="logement" value="${esc(Ls[0].id)}"><div class="card" style="margin:0">${esc(Ls[0].name)} · ${esc(Ls[0].city)}</div>`}
+    <label class="lab" for="f-log">Logement</label>${Ls.length > 1 ? `<select id="f-log" name="logement">${Ls.map(L => `<option value="${esc(L.id)}" ${ui.preLog === L.id ? 'selected' : ''}>${esc(L.name)} – ${esc(L.city)}</option>`).join('')}</select>` : `<input type="hidden" name="logement" value="${esc(Ls[0].id)}"><div class="card" style="margin:0">${esc(Ls[0].name)} · ${esc(Ls[0].city)}</div>`}
     <p class="lab">1. Quel type de problème ?</p><div class="chips">${Object.entries(CATS).map(([k, l]) => `<label class="choice"><input type="radio" name="cat" value="${k}" data-guided="cat"><span>${CAT_ICON[k]} ${l}</span></label>`).join('')}</div><div class="err" data-err="cat"></div>
     <div id="g-prob" hidden><p class="lab">2. Choisissez le problème</p><div id="g-prob-list"></div><div class="err" data-err="prob"></div></div>
     <div id="g-where-slot" hidden>${fText('where', 'Où exactement ?', {max:120, attrs:'placeholder="Ex. : sous l’évier de la cuisine"'})}</div>
@@ -1120,7 +1133,7 @@ function viewReport(){
 function viewNotifs(){
   const m = me();
   const list = DATA().notifs.filter(n => n.to === m.id).sort((a, b) => b.at - a.at);
-  let s = `<h1>Notifications</h1><p class="muted small">Notifications affichées dans l'appli uniquement. Aucun e-mail ni SMS n'est envoyé.</p>`;
+  let s = `<h1>Notifications</h1><p class="muted small">${isShared() ? 'Elles arrivent aussi sur votre téléphone si vous avez activé les notifications (Menu).' : 'Démonstration : notifications affichées dans l’appli uniquement.'}</p>`;
   if (list.some(n => !n.read)) s += `<button class="btn block" data-act="read-all">Tout marquer comme lu</button>`;
   s += list.length ? list.map(n => `<button class="card dcard ${n.read ? '' : 'mine'}" data-act="notif" data-id="${esc(n.id)}" data-d="${esc(n.dossierId)}">${n.read ? '' : '<span class="badge warn">Nouveau</span> '}${esc(n.text)}<div class="muted small">${esc(fmtDT(n.at))}</div></button>`).join('') : `<div class="empty">Aucune notification.</div>`;
   return s;
@@ -1141,10 +1154,12 @@ function viewMenu(){
     <p class="muted small">Sauvegarde dans ce navigateur uniquement${storageOk ? '' : ' (indisponible ici)'} : elle peut être effacée par le téléphone et n'est pas une sauvegarde durable.</p>`;
   } else {
     if (SH.admin) s += `<h2>Administrateur</h2><div class="btns"><button class="btn primary block" data-act="go" data-view="admin">Administration de l'appli</button></div>`;
+    if (PUSH.state === '?') pushCheck();
+    s += `<h2>Notifications sur ce téléphone</h2><div class="card">${pushBox()}</div>`;
     s += `<h2>Mon compte</h2><div class="card"><p><b>${esc(SH.me ? SH.me.name : '')}</b> · ${esc(SH.me ? ROLE_TITLE[SH.me.role] : '')}</p><p class="muted small">${esc(SH.email)}</p></div>
-    <div class="btns">${SH.me && SH.me.role !== 'owner' ? '<button class="btn block" data-act="want-code">Saisir un nouveau code d’invitation</button>' : ''}<button class="btn ghost block" data-act="logout">Se déconnecter</button></div>`;
+    <div class="btns">${SH.me && SH.me.role !== 'owner' ? '<button class="btn block" data-act="want-code">Saisir un nouveau code d’invitation</button>' : ''}<button class="btn block" data-act="go" data-view="privacy">Confidentialité et mes données</button><button class="btn ghost block" data-act="logout">Se déconnecter</button></div>`;
   }
-  s += `<h2>Ce qui est réel et ce qui est simulé</h2>${limitsHtml()}`;
+  s += `<details style="margin-top:18px"><summary>Ce qui fonctionne et les limites</summary>${limitsHtml()}</details>`;
   return s;
 }
 /* ---------- Administration (compte administrateur seulement, vérifié par le serveur) ---------- */
@@ -1212,8 +1227,8 @@ document.addEventListener('click', ev => {
 });
 
 function limitsHtml(){
-  return `<div class="sec"><h3>Fonctionne réellement</h3><ul><li>Création des dossiers, statuts, propositions, rendez-vous, comptes rendus, échanges et historique.</li><li>Les règles du parcours : un devis modifié demande un nouvel accord, un rendez-vous modifié doit être reconfirmé, une intervention terminée n’est pas clôturée automatiquement.</li><li>Démo : sauvegarde dans le navigateur de ce téléphone.</li><li>Vrai compte (appli installée) : connexion par e-mail et mot de passe, dossiers partagés entre le propriétaire, son locataire et le professionnel choisi, mis à jour toutes les 20 secondes.</li><li>Conversations séparées : le locataire échange avec le propriétaire, le propriétaire avec le professionnel. Le locataire ne voit ni la conversation avec le professionnel ni le montant de la proposition. Ces règles sont vérifiées par le serveur.</li></ul></div>
-  <div class="sec"><h3>Simulé ou pas encore disponible</h3><ul><li>Notifications : affichées dans l'appli seulement, aucun e-mail ni SMS.</li><li>Photos : aperçu local, non enregistré.</li><li>Devis : simple description et montant, pas de PDF ni de signature.</li><li>Démo : le sélecteur de rôle n’est pas une connexion et ne protège rien.</li><li>Vrai compte : qui voit quoi est contrôlé par le serveur, mais l'ordre des étapes (par exemple qui peut accepter une proposition) est encore contrôlé seulement par l'appli. Réservé à une phase de test avec des personnes de confiance.</li><li>L'administrateur de l'appli peut consulter les dossiers et les messages pour l'assistance et la modération.</li><li>Pas encore de page de confidentialité ni de suppression de compte en libre-service.</li><li>Visite préalable : simple indication pour l’instant.</li></ul></div>
+  return `<div class="sec"><h3>Fonctionne réellement</h3><ul><li>Création des dossiers, statuts, propositions, rendez-vous, comptes rendus, échanges et historique.</li><li>Les règles du parcours : un devis modifié demande un nouvel accord, un rendez-vous modifié doit être reconfirmé, une intervention terminée n’est pas clôturée automatiquement.</li><li>Démo : sauvegarde dans le navigateur de ce téléphone.</li><li>Vrai compte (appli installée) : connexion par e-mail et mot de passe, dossiers partagés entre le propriétaire, son locataire et le professionnel choisi.</li><li>Conversations séparées : le locataire échange avec le propriétaire, le propriétaire avec le professionnel. Le locataire ne voit ni la conversation avec le professionnel ni le montant de la proposition.</li><li>Le serveur vérifie qui voit quoi et l'ordre des étapes : par exemple, seul le propriétaire peut accepter une proposition, seul le locataire confirme un rendez-vous.</li><li>Photos et vidéos enregistrées, visibles seulement par les participants du dossier.</li><li>Notifications sur le téléphone (appli installée, à activer dans le Menu).</li><li>Lien de réponse pour un professionnel qui n'a pas de compte.</li><li>Rendez-vous à ajouter à l'agenda, QR code et carnet du logement.</li></ul></div>
+  <div class="sec"><h3>Limites actuelles</h3><ul><li>Aucun e-mail ni SMS n'est envoyé par l'appli.</li><li>Devis : simple description et montant, pas de PDF ni de signature.</li><li>Démo : le sélecteur de rôle n’est pas une connexion et ne protège rien.</li><li>L'administrateur de l'appli peut consulter les dossiers et les messages pour l'assistance et la modération.</li><li>Visite préalable : simple indication pour l’instant.</li></ul></div>
   <div class="banner urg">${esc(URGENCE)}</div>`;
 }
 
@@ -1248,7 +1263,7 @@ function viewGuide(){
   </ol>
   <p class="small">Le locataire parle uniquement au propriétaire ; le propriétaire parle au locataire et au professionnel. Le locataire et le professionnel ne s'écrivent pas directement : ils se coordonnent par les rendez-vous de l'appli.</p></div>
   <div class="sec"><h3>Ajouter l'appli à l'écran d'accueil</h3><p>Ouvrez le lien de l'appli dans Safari (ou Chrome), touchez Partager, puis « Sur l’écran d’accueil ». Ce raccourci ouvre l'appli comme les autres, avec son icône ; ce n'est pas une application de l'App Store.</p></div>
-  <h2>Ce qui est réel et ce qui est simulé</h2>${limitsHtml()}`;
+  <h2>Ce qui fonctionne et les limites</h2>${limitsHtml()}`;
 }
 
 /* ---------- Espace réel : écrans d'entrée ---------- */
@@ -1297,6 +1312,331 @@ async function createInvite(kind, id){
   throw new Error('code');
 }
 
+/* =========================================================
+   Ajouts : notifications sur le téléphone, confidentialité, agenda, QR code, carnet PDF, lien de réponse du professionnel
+   ========================================================= */
+const FN_URL = ((RL && RL.url) || 'https://vvxkkqcmjrwytagbxdfg.supabase.co') + '/functions/v1/reparloc';
+const CONTACT_EMAIL = ''; // adresse de contact affichée dans « Confidentialité » (à compléter)
+
+/* ---------- Ouverture depuis un lien (notification, QR code, lien du professionnel) ---------- */
+const START = (() => { try { return new URLSearchParams(location.search); } catch(e){ return new URLSearchParams(); } })();
+if (START.get('d')) ui.pending = {d:START.get('d')};
+if (START.get('signaler')) ui.pending = {signaler:START.get('signaler')};
+if (START.get('r')) ui.link = {token:START.get('r'), data:null, err:'', loading:false};
+if ((START.get('d') || START.get('signaler')) && history.replaceState) try { history.replaceState(null, '', location.pathname); } catch(e){}
+function applyPending(){
+  const p = ui.pending; if (!p || !me()) return;
+  if (isShared() && SH.status !== 'ready') return;
+  ui.pending = null;
+  if (p.d){ const d = DATA().dossiers.find(x => x.id === p.d); if (d && canSee(d)) go('dossier', d.id); }
+  if (p.signaler){
+    if (me().role === 'tenant' && myLogements().some(L => L.id === p.signaler)){ ui.preLog = p.signaler; go('signaler'); }
+    else if (me().role === 'tenant') toast("Ce QR code correspond à un autre logement que le vôtre.", true);
+  }
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', ev => {
+  const u = ev.data && ev.data.open; if (!u) return;
+  try { const id = new URL(u).searchParams.get('d'); if (id){ ui.pending = {d:id}; if (isShared() && SH.status === 'ready') reloadShared().catch(() => {}); applyPending(); } } catch(e){}
+});
+
+/* ---------- Notifications sur le téléphone ---------- */
+const PUSH = {state:'?'};
+const isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const b64uBytes = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0));
+async function pushReg(){ return navigator.serviceWorker.getRegistration(); }
+async function pushCheck(){
+  const prev = PUSH.state;
+  if (!RL || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) PUSH.state = isIOS() && !isStandalone() ? 'ios-browser' : 'unsupported';
+  else if (Notification.permission === 'denied') PUSH.state = 'denied';
+  else { try { const reg = await pushReg(); const sub = reg && await reg.pushManager.getSubscription(); PUSH.state = sub && Notification.permission === 'granted' ? 'on' : 'off'; } catch(e){ PUSH.state = 'off'; } }
+  if (prev !== PUSH.state && ['home','menu'].includes(ui.view)) render();
+}
+async function pushEnable(){
+  let perm;
+  try { perm = await Notification.requestPermission(); } catch(e){ perm = 'default'; }
+  if (perm !== 'granted'){ PUSH.state = perm === 'denied' ? 'denied' : 'off'; render(); toast(perm === 'denied' ? 'Notifications refusées. Vous pouvez les autoriser dans les réglages du téléphone.' : 'Notifications non activées.', true); return; }
+  try {
+    const reg = (await pushReg()) || await navigator.serviceWorker.register('sw.js');
+    await navigator.serviceWorker.ready;
+    const key = await q(SH.sb.rpc('push_public_key'));
+    if (!key) throw new Error('clé de notification indisponible');
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64uBytes(key)});
+    const j = sub.toJSON();
+    await q(SH.sb.rpc('push_register', {p_app:'reparloc', p_endpoint:j.endpoint, p_sub:j, p_prefs:{}, p_appareil:(isIOS() ? 'iPhone' : 'Téléphone') + ' · ' + new Date().toLocaleDateString('fr-FR')}));
+    PUSH.state = 'on'; PREFS.pushHide = true; savePrefs(); render(); toast('C’est activé : vous serez prévenu sur ce téléphone.');
+  } catch(e){ PUSH.state = 'off'; render(); toast(sbErr(e), true); }
+}
+async function pushDisable(silent){
+  try {
+    const reg = await pushReg(); const sub = reg && await reg.pushManager.getSubscription();
+    if (sub){ if (SH.sb) await SH.sb.from('push_subs').delete().eq('endpoint', sub.endpoint); await sub.unsubscribe(); }
+  } catch(e){}
+  PUSH.state = 'off'; if (!silent){ render(); toast('Notifications désactivées sur ce téléphone.'); }
+}
+function pushBox(){
+  const st = PUSH.state;
+  if (st === 'on') return `<p>✅ Activées sur ce téléphone.</p><div class="btns"><button class="btn block" data-act="push-test">Envoyer une notification d'essai</button><button class="btn ghost block" data-act="push-off">Désactiver sur ce téléphone</button></div>`;
+  if (st === 'off') return `<p class="muted small">Recevez une alerte dès qu'un dossier bouge (nouveau signalement, proposition, rendez-vous, message).</p><div class="btns"><button class="btn primary block" data-act="push-on">Activer les notifications</button></div>`;
+  if (st === 'denied') return `<p class="muted small">Les notifications sont bloquées pour Répar'Loc. Pour les autoriser : Réglages du téléphone → Notifications → Répar'Loc.</p>`;
+  if (st === 'ios-browser') return `<p class="muted small">Sur iPhone, les notifications marchent quand l'appli est sur l'écran d'accueil : dans Safari, touchez Partager puis « Sur l’écran d’accueil », et ouvrez Répar'Loc depuis cette icône.</p>`;
+  if (st === 'unsupported') return `<p class="muted small">Ce téléphone ou ce navigateur ne permet pas les notifications de l'appli.</p>`;
+  return `<p class="muted small">Vérification…</p>`;
+}
+
+/* ---------- Confidentialité et suppression du compte ---------- */
+function viewPrivacy(){
+  const back = `<button class="back" data-act="go" data-view="menu">← Retour</button>`;
+  return `${back}<h1>Confidentialité et mes données</h1>
+  <div class="sec"><h3>Qui s'occupe de vos données ?</h3><p>Répar'Loc est édité par Tullio Disegni, à titre personnel, pour tester un service de suivi des réparations entre locataires, propriétaires et professionnels. ${CONTACT_EMAIL ? `Contact : <a href="mailto:${esc(CONTACT_EMAIL)}">${esc(CONTACT_EMAIL)}</a>.` : 'Pour toute question, adressez-vous à la personne qui vous a invité dans l’appli, qui transmettra.'}</p></div>
+  <div class="sec"><h3>Ce que l'appli enregistre</h3><ul><li>Votre adresse e-mail et votre mot de passe (chiffré) pour vous connecter.</li><li>Votre nom affiché et votre rôle (propriétaire, locataire ou professionnel).</li><li>Les logements (nom et ville), les professionnels ajoutés par un propriétaire.</li><li>Les dossiers : description du problème, disponibilités, propositions, rendez-vous, comptes rendus, messages, photos et vidéos.</li><li>Si vous les activez : l'adresse technique qui permet d'envoyer les notifications à ce téléphone.</li></ul></div>
+  <div class="sec"><h3>Pourquoi et qui les voit</h3><p>Uniquement pour faire fonctionner le suivi des réparations. Chacun ne voit que ses propres dossiers : le locataire et le propriétaire d'un logement, et le professionnel choisi pour un dossier. Le locataire ne voit ni les échanges avec le professionnel ni les montants. L'administrateur de l'appli peut consulter les dossiers pour l'assistance et la modération.</p><p>Aucune publicité, aucune revente, aucun pistage. Vos données sont hébergées chez Supabase, dans l'Union européenne. Les notifications passent par le service d'Apple ou de Google, sous forme chiffrée.</p></div>
+  <div class="sec"><h3>Combien de temps</h3><p>Tant que votre compte existe. Vous pouvez tout effacer vous-même ci-dessous, à tout moment.</p></div>
+  <div class="sec"><h3>Vos droits</h3><p>Vous pouvez consulter, corriger ou effacer vos données, et vous opposer à leur utilisation. Vous pouvez aussi saisir la CNIL (cnil.fr).</p></div>
+  ${isShared() && SH.me ? `<div class="sec"><h3>Supprimer mon compte</h3><p class="small">${SH.me.role === 'owner' ? 'Vos logements, vos professionnels, tous leurs dossiers, messages, photos et vidéos seront effacés, pour vous et pour vos locataires et professionnels.' : SH.me.role === 'tenant' ? 'Vous serez détaché de votre logement, et vos messages et notifications seront effacés. Les dossiers restent chez votre propriétaire, qui en a besoin pour le suivi du logement.' : 'Vous serez détaché des propriétaires qui vous ont invité, et vos messages et notifications seront effacés. Les dossiers restent chez les propriétaires.'}</p><button class="btn danger block" data-act="delete-account">Supprimer mon compte Répar'Loc</button></div>` : ''}`;
+}
+async function deleteAccount(){
+  const role = SH.me && SH.me.role;
+  if (role === 'owner'){
+    const paths = SH.dossiers.filter(d => { const L = logement(d.logementId); return L && L.ownerId === SH.uid; }).flatMap(d => (d.media || []).filter(m => m.p).map(m => m.p));
+    for (let i = 0; i < paths.length; i += 100){ try { await SH.sb.storage.from('rl-media').remove(paths.slice(i, i + 100)); } catch(e){} }
+  }
+  await pushDisable(true);
+  const r = await SH.sb.rpc('rl_delete_my_data');
+  if (r.error) return {errors:{_:/rl_delete_my_data|function/i.test(r.error.message || '') ? 'La suppression n’est pas encore disponible : réessayez un peu plus tard.' : sbErr(r.error)}};
+  try { await SH.sb.auth.signOut(); } catch(e){}
+  resetShared(); SH.status = 'auth'; ui.authMode = 'login'; ui.view = 'home'; PREFS.welcomed = false; savePrefs(); render();
+  toast('Votre compte Répar’Loc et vos données ont été supprimés.');
+  return {silent:true};
+}
+
+/* ---------- Ajouter un rendez-vous à l'agenda ---------- */
+function icsUrl(d){
+  const a = d.appointment, L = logement(d.logementId);
+  const notes = `Dossier ${d.num}${d.proId ? ' · ' + proName(d.proId) : ''}. ${APP_LINK}?d=${encodeURIComponent(d.id)}`;
+  return `${FN_URL}?ics=1&id=${encodeURIComponent(d.id + '-' + (a.version || 1))}&date=${encodeURIComponent(a.date)}&slot=${encodeURIComponent(a.slot)}&titre=${encodeURIComponent('Réparation : ' + d.title)}&lieu=${encodeURIComponent(L ? `${L.name}, ${L.city}` : '')}&notes=${encodeURIComponent(notes)}`;
+}
+function calBtn(d){
+  const a = d.appointment;
+  if (!a || !['proposé','confirmé'].includes(a.status) || a.date < todayISO() || CLOSED.includes(d.status)) return '';
+  return `<a class="btn block" style="margin-top:8px;text-decoration:none" href="${esc(icsUrl(d))}" target="_blank" rel="noopener">📅 Ajouter à mon agenda</a>${a.status === 'proposé' ? '<p class="muted small">Pas encore confirmé : vous pourrez le modifier dans votre agenda si la date change.</p>' : ''}`;
+}
+
+/* ---------- QR code à coller dans le logement ---------- */
+function qrCanvas(text, L){
+  const qr = window.qrcode(0, 'M'); qr.addData(text); qr.make();
+  const n = qr.getModuleCount(), W = 1000, H = 1380, cell = Math.floor(700 / (n + 8)), size = cell * (n + 8), x0 = (W - size) / 2, y0 = 300;
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d');
+  g.fillStyle = '#f7efe0'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#1f5a3d'; g.fillRect(0, 0, W, 230);
+  g.fillStyle = '#fff'; g.textAlign = 'center'; g.font = 'bold 64px -apple-system, Helvetica, Arial, sans-serif'; g.fillText('Un souci dans le logement ?', W / 2, 105);
+  g.font = '38px -apple-system, Helvetica, Arial, sans-serif'; g.fillText('Scannez pour le signaler à votre propriétaire', W / 2, 175);
+  g.fillStyle = '#fff'; g.fillRect(x0, y0, size, size);
+  g.fillStyle = '#14301f';
+  for (let r = 0; r < n; r++) for (let k = 0; k < n; k++) if (qr.isDark(r, k)) g.fillRect(x0 + (k + 4) * cell, y0 + (r + 4) * cell, cell, cell);
+  g.fillStyle = '#1b2620'; g.font = 'bold 44px -apple-system, Helvetica, Arial, sans-serif';
+  const name = (L.name || '').length > 34 ? L.name.slice(0, 33) + '…' : L.name;
+  g.fillText(name, W / 2, y0 + size + 90);
+  g.font = '36px -apple-system, Helvetica, Arial, sans-serif'; g.fillStyle = '#5d6b63'; g.fillText(L.city || '', W / 2, y0 + size + 145);
+  g.font = '30px -apple-system, Helvetica, Arial, sans-serif';
+  g.fillText("Ouvrez l'appareil photo et visez le code. Urgence (gaz, feu) : 112.", W / 2, H - 120);
+  g.fillStyle = '#1f5a3d'; g.font = 'bold 36px -apple-system, Helvetica, Arial, sans-serif'; g.fillText("Répar'Loc", W / 2, H - 60);
+  return c;
+}
+let qrBlob = null;
+function openQR(L){
+  if (!window.qrcode){ toast("Le QR code est disponible dans l'appli installée.", true); return; }
+  const c = qrCanvas(`${APP_LINK}?signaler=${encodeURIComponent(L.id)}`, L);
+  const url = c.toDataURL('image/png');
+  c.toBlob(b => { qrBlob = b; }, 'image/png');
+  openModal('QR code du logement', `<p class="muted small">Imprimez-le ou montrez-le à votre locataire : en le scannant avec l'appareil photo, il ouvre directement « Signaler un problème » pour ce logement (une fois son compte créé avec votre code).</p>
+    <img src="${url}" alt="QR code pour signaler un problème dans ${esc(L.name)}" style="width:100%;border-radius:12px;border:1px solid var(--line)">
+    <div class="btns"><button type="button" class="btn primary block" data-act="qr-share" data-name="${esc(L.name)}">Enregistrer ou partager l'image</button></div>
+    <p class="muted small">Astuce : vous pouvez aussi rester appuyé sur l'image pour l'enregistrer dans vos photos.</p>`, null, null, {cancel:'Fermer'});
+}
+async function shareFile(blob, name, fallbackTitle){
+  const file = new File([blob], name, {type:blob.type});
+  try { if (navigator.canShare && navigator.canShare({files:[file]})){ await navigator.share({files:[file], title:fallbackTitle}); return; } } catch(e){ if (e && e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+}
+
+/* ---------- Carnet du logement (écran + PDF) ---------- */
+function carnetEntries(L){
+  return DATA().dossiers.filter(d => d.logementId === L.id && canSee(d)).map(viewOf).sort((a, b) => b.createdAt - a.createdAt).map(d => {
+    const cycles = [...(d.past || []), {proId:d.proId, quote:d.quote, appointment:d.appointment, report:d.report, feedback:d.feedback}].filter(c => c.proId || c.quote || c.report);
+    return {d, cycles: cycles.map(c => ({pro:c.proId ? proName(c.proId) : '', amount:c.quote && c.quote.status === 'acceptée' ? c.quote.amount : null, quoteDesc:c.quote && c.quote.status === 'acceptée' ? c.quote.description : '', date:c.appointment && c.appointment.status === 'confirmé' ? c.appointment.date : '', report:c.report ? c.report.text : '', resolved:c.feedback ? c.feedback.resolved : null}))};
+  });
+}
+function viewCarnet(){
+  const L = logement(ui.id), m = me();
+  const back = `<button class="back noprint" data-act="go" data-view="logements">← Retour aux logements</button>`;
+  if (!L || m.role !== 'owner' || L.ownerId !== m.id) return `${back}<div class="empty">Carnet indisponible.</div>`;
+  const E = carnetEntries(L);
+  const total = E.reduce((s, e) => s + e.cycles.reduce((t, c) => t + (c.amount || 0), 0), 0);
+  let s = `${back}<h1>Carnet du logement</h1><p><b>${esc(L.name)}</b> · ${esc(L.city)}</p>
+    <p class="muted small">${E.length} dossier${E.length > 1 ? 's' : ''} · ${esc(fmtEUR(total))} de propositions acceptées. Utile pour une revente, un changement de locataire ou un litige.</p>
+    <button class="btn primary block noprint" data-act="carnet-pdf" data-id="${esc(L.id)}">📄 Télécharger le carnet en PDF</button>`;
+  s += E.length ? E.map(({d, cycles}) => `<div class="sec"><h3 style="color:var(--text)">${esc(d.title)}</h3><div class="status-line">${statusBadge(d)}<span class="badge closed">${esc(CATS[d.category] || '')}</span></div>
+    <p class="small muted">Signalé le ${esc(fmtDT(d.createdAt))} · ${esc(d.num)}</p>
+    ${cycles.map(c => `<p class="small">${c.pro ? `<b>${esc(c.pro)}</b>` : ''}${c.amount != null ? ` · ${esc(fmtEUR(c.amount))}` : ''}${c.date ? ` · intervention le ${esc(fmtDay(c.date))}` : ''}${c.report ? `<br>Compte rendu : ${esc(c.report)}` : ''}${c.resolved != null ? `<br>Retour du locataire : ${c.resolved ? 'problème résolu' : 'le problème persistait'}` : ''}</p>`).join('')}
+    ${d.closure ? `<p class="small">${d.closure.type === 'classe' ? 'Classé sans intervention' : 'Clôturé'} le ${esc(fmtDT(d.closure.at))}${d.closure.reason ? ` : ${esc(d.closure.reason)}` : ''}</p>` : ''}</div>`).join('') : `<div class="empty">Aucun dossier pour ce logement.</div>`;
+  return s;
+}
+/* Petit générateur PDF (texte, polices Helvetica intégrées aux lecteurs PDF, accents français). */
+const HELV = (() => { const w = {}; ' !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~'.split('').forEach((ch, i) => w[ch] = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584][i]); return w; })();
+const WIN = {'€':128,'‚':130,'„':132,'…':133,'‘':145,'’':146,'“':147,'”':148,'•':149,'–':150,'—':151,'œ':156,'Œ':140,'Ÿ':159};
+function pdfChar(ch){ const c = ch.charCodeAt(0); if (WIN[ch]) return WIN[ch]; if (c === 0x202f || c === 0xa0) return 32; if (c < 256) return c; return 63; }
+function textWidth(t, size){ let w = 0; for (const ch of t){ const base = ch.normalize('NFD')[0]; w += HELV[ch] || HELV[base] || (ch === '€' ? 556 : 556); } return w * size / 1000; }
+function wrap(t, size, max){
+  const out = []; String(t || '').split(/\n/).forEach(par => { let line = ''; par.split(/\s+/).forEach(word => { const cand = line ? line + ' ' + word : word; if (textWidth(cand, size) > max && line){ out.push(line); line = word; } else line = cand; }); out.push(line); });
+  return out;
+}
+function buildPdf(blocks){
+  // blocks : [{t, size, bold, color, gap}]
+  const PW = 595, PH = 842, M = 50, pages = []; let ops = [], y = PH - M;
+  const newPage = () => { pages.push(ops); ops = []; y = PH - M; };
+  const enc = s => Array.from(s).map(ch => { const c = pdfChar(ch); return c === 40 || c === 41 || c === 92 ? '\\' + String.fromCharCode(c) : String.fromCharCode(c); }).join('');
+  for (const b of blocks){
+    const size = b.size || 10, lh = size * 1.35;
+    if (b.gap) y -= b.gap;
+    if (b.rule){ if (y < M + 20) newPage(); ops.push(`0.8 0.85 0.82 RG 0.6 w ${M} ${y.toFixed(1)} m ${PW - M} ${y.toFixed(1)} l S`); y -= 8; continue; }
+    for (const line of wrap(b.t, size, PW - 2 * M)){
+      if (y - lh < M){ newPage(); }
+      y -= lh;
+      ops.push(`BT /${b.bold ? 'F2' : 'F1'} ${size} Tf ${b.color || '0.1 0.15 0.12'} rg ${M} ${y.toFixed(1)} Td (${enc(line)}) Tj ET`);
+    }
+  }
+  pages.push(ops);
+  const objs = [];
+  const add = s => { objs.push(s); return objs.length; };
+  const cat = add(''), pagesId = add(''), f1 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'), f2 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+  const kids = pages.map((p, i) => {
+    const content = p.join('\n') + `\nBT /F1 8 Tf 0.4 0.45 0.42 rg ${M} 25 Td (${enc(`Répar'Loc · page ${i + 1} / ${pages.length}`)}) Tj ET`;
+    const c = add(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    return add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> >> /Contents ${c} 0 R >>`);
+  });
+  objs[cat - 1] = `<< /Type /Catalog /Pages ${pagesId} 0 R >>`;
+  objs[pagesId - 1] = `<< /Type /Pages /Kids [${kids.map(k => k + ' 0 R').join(' ')}] /Count ${kids.length} >>`;
+  let out = '%PDF-1.4\n%\xe2\xe3\xcf\xd3\n'; const offs = [];
+  objs.forEach((o, i) => { offs.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('') + `trailer\n<< /Size ${objs.length + 1} /Root ${cat} 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  const bytes = new Uint8Array(out.length); for (let i = 0; i < out.length; i++) bytes[i] = out.charCodeAt(i) & 255;
+  return new Blob([bytes], {type:'application/pdf'});
+}
+function carnetPdf(L){
+  const E = carnetEntries(L);
+  const total = E.reduce((s, e) => s + e.cycles.reduce((t, c) => t + (c.amount || 0), 0), 0);
+  const G = '0.12 0.35 0.24', M = '0.36 0.42 0.39';
+  const B = [{t:"Carnet d'entretien du logement", size:20, bold:true, color:G}, {t:`${L.name} · ${L.city}`, size:13, bold:true, gap:4},
+    {t:`Édité le ${new Date().toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'})} avec Répar'Loc · ${E.length} dossier${E.length > 1 ? 's' : ''} · ${fmtEUR(total)} de propositions acceptées`, size:9.5, color:M, gap:2}, {rule:true, gap:10}];
+  E.forEach(({d, cycles}) => {
+    B.push({t:d.title, size:12, bold:true, gap:10});
+    B.push({t:`${CATS[d.category] || ''} · signalé le ${fmtDT(d.createdAt)} · ${d.num} · ${ST[d.status] || d.status}`, size:9, color:M});
+    if (d.description) B.push({t:d.description, size:9.5, gap:3});
+    cycles.forEach(c => {
+      const head = [c.pro, c.amount != null ? 'proposition acceptée : ' + fmtEUR(c.amount) : '', c.date ? 'intervention le ' + fmtDay(c.date) : ''].filter(Boolean).join(' · ');
+      if (head) B.push({t:head, size:9.5, bold:true, gap:4});
+      if (c.quoteDesc) B.push({t:'Travaux prévus : ' + c.quoteDesc, size:9.5});
+      if (c.report) B.push({t:'Compte rendu : ' + c.report, size:9.5});
+      if (c.resolved != null) B.push({t:'Retour du locataire : ' + (c.resolved ? 'le problème semble résolu' : 'le problème persistait'), size:9.5});
+    });
+    if (d.closure) B.push({t:`${d.closure.type === 'classe' ? 'Classé sans intervention' : 'Clôturé'} le ${fmtDT(d.closure.at)}${d.closure.reason ? ' : ' + d.closure.reason : ''}`, size:9.5, color:M, gap:3});
+    B.push({rule:true, gap:8});
+  });
+  if (!E.length) B.push({t:'Aucun dossier pour ce logement.', size:10, gap:10});
+  B.push({t:"Document établi à partir des informations saisies dans Répar'Loc par les participants. Les montants sont indicatifs (propositions acceptées dans l'appli, hors facture).", size:8, color:M, gap:14});
+  return buildPdf(B);
+}
+
+/* ---------- Lien de réponse pour le professionnel (côté propriétaire) ---------- */
+function newToken(){ const b = crypto.getRandomValues(new Uint8Array(24)); return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+async function ensureProLink(d){
+  const ex = await q(SH.sb.from('rl_pro_links').select('token').eq('dossier_id', d.id).eq('pro_id', d.proId));
+  if (ex.length) return ex[0].token;
+  const token = newToken();
+  await q(SH.sb.from('rl_pro_links').insert({token, dossier_id:d.id, pro_id:d.proId}));
+  return token;
+}
+function proLinkSection(d){
+  if (!isShared() || me().role !== 'owner' || !d.proId || CLOSED.includes(d.status)) return '';
+  const p = pro(d.proId); if (!p || p.uid) return '';
+  return section('Réponse du professionnel', `<p class="small">${esc(p.name)} n'a pas de compte Répar'Loc. Envoyez-lui un lien : il verra ce dossier (description, photos, disponibilités) et pourra vous répondre, faire sa proposition et proposer un rendez-vous, sans rien installer.</p><button class="btn primary block" data-act="pro-link" data-id="${esc(d.id)}">Envoyer le lien à ${esc(p.name)}</button><p class="muted small">Le lien ne marche que pour ce dossier, et seulement tant que ${esc(p.name)} en est chargé.</p>`);
+}
+async function openProLink(id){
+  const d = getD(id); if (!d || !d.proId) return;
+  let token;
+  try { token = await ensureProLink(d); } catch(e){ toast(sbErr(e), true); return; }
+  const L = logement(d.logementId), p = pro(d.proId);
+  const txt = `Bonjour, voici une demande d'intervention : « ${d.title} »${L ? ` (${L.city})` : ''}. Vous pouvez voir le dossier et les photos, et me répondre ici, sans créer de compte : ${APP_LINK}?r=${token}`;
+  openModal(`Lien pour ${p ? p.name : 'le professionnel'}`, `<p class="small">Message prêt à envoyer par SMS, WhatsApp ou e-mail :</p><div class="msg">${esc(txt)}</div><div class="btns"><button type="button" class="btn primary block" data-act="share-text" data-text="${esc(txt)}">Envoyer (SMS, WhatsApp…)</button></div>`, null, null, {cancel:'Fermer'});
+}
+
+/* ---------- Page du professionnel ouverte depuis son lien (sans compte) ---------- */
+async function linkCall(body){
+  const r = await fetch(FN_URL, {method:'POST', headers:{'Content-Type':'application/json', apikey:(RL && RL.key) || ''}, body:JSON.stringify(Object.assign({token:ui.link.token}, body || {}))});
+  let j = {}; try { j = await r.json(); } catch(e){}
+  if (!r.ok) throw Object.assign(new Error(j.erreur || 'serveur'), {code:j.erreur || 'serveur'});
+  return j;
+}
+const LINK_ERR = {lien_inconnu:"Ce lien n'existe pas. Vérifiez qu'il a été copié en entier.", lien_expire:"Ce lien n'est plus valable : le dossier a été confié à quelqu'un d'autre ou n'existe plus.", dossier_termine:'Ce dossier est terminé.', etape:"Cette étape n'est plus possible : le dossier a changé. L'écran a été actualisé.", motif:'Indiquez un motif (5 caractères minimum).', description:"Décrivez l'intervention (10 caractères minimum).", montant:'Indiquez un montant valide, par exemple 150.', date:'Choisissez une date à partir de demain.', creneau:'Choisissez un créneau.', compte_rendu:'Le compte rendu est obligatoire (10 caractères minimum).', message_vide:'Le message est vide.'};
+const linkErr = e => LINK_ERR[e && e.code] || (/Failed to fetch|NetworkError|Load failed/i.test(String(e && e.message)) ? 'Pas de connexion internet. Réessayez dans un instant.' : 'Une erreur est survenue. Réessayez.');
+async function linkLoad(){
+  ui.link.loading = true; render();
+  try { ui.link.data = await linkCall({action:'view'}); ui.link.err = ''; } catch(e){ ui.link.err = linkErr(e); }
+  ui.link.loading = false; render();
+}
+async function linkAct(action, f){
+  try { ui.link.data = await linkCall(Object.assign({action}, f)); ui.link.err = ''; render(); window.scrollTo(0, 0); return null; }
+  catch(e){ if (e.code === 'etape' || e.code === 'lien_expire') linkLoad(); return {errors:{_:linkErr(e)}}; }
+}
+function viewLink(){
+  const L = ui.link, D = L.data;
+  if (!D){
+    if (!L.loading && !L.err) setTimeout(linkLoad, 0);
+    return `<div class="hero">${logo()}<div><h1>Demande d'intervention</h1><p>Répar'Loc</p></div></div>${L.err ? `<div class="banner err">${esc(L.err)}</div><button class="btn block" data-act="link-reload">Réessayer</button>` : '<div class="empty">Chargement…</div>'}`;
+  }
+  const a = D.appointment, q2 = D.quote, st = D.status;
+  let s = `<div class="hero">${logo()}<div><h1>${esc(D.title)}</h1><p>Demande de ${esc(D.ownerName)} · ${esc(D.logement.city)}</p></div></div>
+    ${L.err ? `<div class="banner err">${esc(L.err)}</div>` : ''}
+    <div class="status-line"><span class="badge ${D.closed ? 'closed' : ''}">${esc(D.statusLabel)}</span>${D.urgent && !D.closed ? '<span class="badge warn">⚠️ Urgent</span>' : ''}<span class="badge closed">${esc(D.num)}</span></div>
+    ${D.next && D.next.text ? `<div class="next ${D.next.me ? 'me' : ''}"><b>${D.next.me ? 'À vous' : 'En attente'}</b>${esc(D.next.text)}</div>` : ''}`;
+  // actions
+  if (st === 'ATTENTE_PRO'){
+    s += `<div class="sec"><h3>${q2 && q2.status === 'modification demandée' ? 'Proposition modifiée' : 'Votre proposition'}</h3>${q2 && q2.status === 'modification demandée' ? `<div class="banner demo"><b>Demande du propriétaire :</b> ${esc(q2.ownerComment)}</div>` : ''}
+      <form data-form="link-quote" novalidate>${fArea('desc', "Description de l'intervention", {req:true, value:q2 ? q2.description : '', hint:'Ce que vous prévoyez de faire.'})}
+      ${fText('amount', 'Montant indicatif TTC (en euros)', {req:true, attrs:'inputmode="decimal" placeholder="Ex. : 150"'})}
+      <label class="choice"><input type="checkbox" name="visit"><span>Une visite préalable serait nécessaire</span></label>
+      <div class="err" data-err="_"></div><button class="btn primary block" type="submit" style="margin-top:10px">Envoyer ma proposition</button></form>
+      <p class="muted small">Proposition dans l'application, ni devis signé ni signature électronique. Le propriétaire vous règle directement.</p>
+      ${!D.accepted ? '<button class="btn ghost block" data-act="link-decline">Je ne peux pas intervenir</button>' : ''}</div>`;
+  }
+  if (['RDV_A_ORGANISER','RDV_PROPOSE','RDV_CONFIRME'].includes(st)){
+    const tom = new Date(Date.now() + DAY);
+    s += `<div class="sec"><h3>${st === 'RDV_A_ORGANISER' ? 'Proposer un rendez-vous' : st === 'RDV_PROPOSE' ? 'Changer la date proposée' : 'Reprogrammer le rendez-vous'}</h3>
+      ${D.availability ? `<div class="banner shared"><b>Disponibilités du locataire :</b> ${esc(D.availability)}</div>` : ''}${a && a.tenantComment ? `<div class="banner demo"><b>Message du locataire :</b> ${esc(a.tenantComment)}</div>` : ''}
+      <form data-form="link-appt" novalidate>${fText('date', 'Date', {req:true, type:'date', attrs:`min="${isoDate(tom)}"`})}
+      <label class="lab" for="f-slot">Créneau</label><select id="f-slot" name="slot"><option value="">Choisir un créneau</option>${SLOTS.map(x => `<option>${x}</option>`).join('')}</select>
+      <div class="err" data-err="_"></div><button class="btn ${st === 'RDV_A_ORGANISER' ? 'primary' : ''} block" type="submit" style="margin-top:10px">Proposer ce rendez-vous</button></form><p class="muted small">Le locataire le confirmera dans l'appli.</p></div>`;
+  }
+  if (st === 'RDV_CONFIRME'){
+    s += `<div class="sec"><h3>Intervention terminée ?</h3><form data-form="link-done" novalidate>${fArea('report', 'Compte rendu', {req:true, hint:'Ce qui a été fait, pièces changées, conseils.'})}
+      <label class="choice"><input type="checkbox" name="extra"><span>Un autre passage est nécessaire</span></label>
+      <div class="err" data-err="_"></div><button class="btn primary block" type="submit" style="margin-top:10px">Indiquer que c'est terminé</button></form></div>`;
+  }
+  // dossier
+  s += section('Le problème', `<p style="white-space:pre-line">${esc(D.description)}</p><dl class="kv"><dt>Logement</dt><dd>${esc(D.logement.name)} · ${esc(D.logement.city)}</dd>${D.tenantName ? `<dt>Locataire</dt><dd>${esc(D.tenantName)}</dd>` : ''}<dt>Disponibilités du locataire</dt><dd>${esc(D.availability || 'Non indiquées')}</dd><dt>Signalé le</dt><dd>${esc(fmtDT(D.createdAt))}</dd></dl>`);
+  if (D.media && D.media.length) s += `<div class="sec mview"><h3>Photos et vidéos (${D.media.length})</h3>${D.media.map((m, i) => m.k === 'vid' ? `<video src="${esc(m.url)}" controls playsinline preload="metadata"></video>` : `<a href="${esc(m.url)}" target="_blank" rel="noopener"><img src="${esc(m.url)}" alt="Photo ${i + 1}" loading="lazy"></a>`).join('')}</div>`;
+  if (q2) s += section('Votre proposition', `<p>${esc(q2.description)}</p><p><b>${esc(fmtEUR(q2.amount))}</b> · version ${q2.version} · ${esc(q2.status)}</p>${q2.ownerComment ? `<p class="small">Commentaire du propriétaire : « ${esc(q2.ownerComment)} »</p>` : ''}`);
+  if (a) s += section('Rendez-vous', `<p style="text-transform:capitalize"><b>${esc(fmtDay(a.date))}</b></p><p>Créneau : ${esc(a.slot)} · ${esc(a.status)}</p>${['proposé','confirmé'].includes(a.status) && a.date >= todayISO() && !D.closed ? `<a class="btn block" style="text-decoration:none" target="_blank" rel="noopener" href="${esc(`${FN_URL}?ics=1&date=${encodeURIComponent(a.date)}&slot=${encodeURIComponent(a.slot)}&titre=${encodeURIComponent('Intervention : ' + D.title)}&lieu=${encodeURIComponent(D.logement.name + ', ' + D.logement.city)}`)}">📅 Ajouter à mon agenda</a>` : ''}`);
+  if (D.report) s += section('Votre compte rendu', `<p>${esc(D.report.text)}</p>${D.feedback ? `<p class="small">Retour du locataire : ${D.feedback.resolved ? 'le problème semble résolu' : 'le problème persiste'}</p>` : ''}`);
+  const msgs = (D.messages || []).map(x => `<div class="msg ${x.mine ? 'me' : ''}"><div class="meta">${x.mine ? 'Vous' : esc(D.ownerName) + ' (propriétaire)'} · ${esc(fmtDT(x.at))}</div>${esc(x.text)}</div>`).join('') || '<p class="muted">Aucun message pour le moment.</p>';
+  s += section(`Échanges avec ${esc(D.ownerName)}`, `<p class="muted small">Visible uniquement par vous et le propriétaire.</p>${msgs}${D.closed ? '' : `<form data-form="link-msg" novalidate><label class="lab" for="f-text">Écrire au propriétaire</label><textarea id="f-text" name="text" maxlength="1500"></textarea><div class="err" data-err="_"></div><button class="btn primary block" type="submit" style="margin-top:8px">Envoyer le message</button></form>`}`);
+  s += `<button class="btn ghost block" data-act="link-reload" style="margin-top:10px">Actualiser</button><p class="muted small" style="text-align:center;margin-top:14px">Lien personnel : ne le transférez pas. Répar'Loc coordonne les échanges, n'encaisse aucun paiement et n'est pas un service d'urgence.</p>`;
+  return s;
+}
+
 /* ---------- Gestion des événements ---------- */
 function showErrors(root, errors){
   root.querySelectorAll('[data-err]').forEach(e => e.textContent = '');
@@ -1320,6 +1660,24 @@ document.addEventListener('click', async ev => {
   if (act === 'modal-bg'){ if (ev.target === t) closeModal(); return; }
   if (act === 'modal-close'){ closeModal(); return; }
   if (act === 'go'){ go(t.dataset.view); return; }
+  if (act === 'push-on'){ pushEnable(); return; }
+  if (act === 'push-off'){ pushDisable(false); return; }
+  if (act === 'push-hide'){ PREFS.pushHide = true; savePrefs(); render(); toast('Vous pourrez les activer plus tard dans le Menu.'); return; }
+  if (act === 'push-test'){ try { await q(SH.sb.rpc('push_test', {p_app:'reparloc', p_title:"Répar'Loc", p_body:'Notification d’essai : tout fonctionne.'})); toast('Envoyée : elle arrive en moins d’une minute.'); } catch(e){ toast(sbErr(e), true); } return; }
+  if (act === 'delete-account'){ openModal('Supprimer mon compte ?', `<p>Cette suppression est <b>définitive</b>.</p>${fText('ok', 'Pour confirmer, écrivez SUPPRIMER', {req:true, max:20, attrs:'autocapitalize="characters" autocomplete="off"'})}`, 'Supprimer définitivement', f => (String(f.ok || '').trim().toUpperCase() !== 'SUPPRIMER' ? {errors:{ok:'Écrivez SUPPRIMER pour confirmer.'}} : deleteAccount()), {danger:true}); return; }
+  if (act === 'qr'){ const L = logement(t.dataset.id); if (L) openQR(L); return; }
+  if (act === 'qr-share'){ if (qrBlob) shareFile(qrBlob, 'QR-code-Repar-Loc.png', 'QR code Répar’Loc'); else toast('Image en préparation, réessayez.', true); return; }
+  if (act === 'carnet'){ go('carnet', t.dataset.id); return; }
+  if (act === 'carnet-pdf'){ const L = logement(t.dataset.id); if (!L) return; try { await shareFile(carnetPdf(L), `Carnet ${L.name}.pdf`.replace(/[\\/:*?"<>|]/g, ''), `Carnet ${L.name}`); } catch(e){ toast('Le PDF n’a pas pu être créé.', true); } return; }
+  if (act === 'pro-link'){ openProLink(t.dataset.id); return; }
+  if (act === 'share-text'){
+    const txt = t.dataset.text;
+    try { if (navigator.share){ await navigator.share({text:txt}); return; } } catch(e){ if (e && e.name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(txt); toast('Message copié : collez-le dans un SMS ou WhatsApp.'); } catch(e){ toast('Copie impossible : recopiez le message à la main.', true); }
+    return;
+  }
+  if (act === 'link-reload'){ linkLoad(); return; }
+  if (act === 'link-decline'){ openModal('Vous ne pouvez pas intervenir ?', `<p class="muted small">Le propriétaire choisira un autre professionnel. Ce lien ne sera plus valable.</p>${fArea('reason', 'Motif', {req:true, hint:'Ex. : pas disponible avant 3 semaines.'})}`, 'Envoyer', f => linkAct('decline', {reason:f.reason}), {danger:true}); return; }
   if (act === 'open'){ go('dossier', t.dataset.id); return; }
   if (act === 'w-role'){ ui.wRole = t.dataset.role; render(); setTimeout(() => { const b = $('[data-act=w-real],[data-act=w-demo]'); if (b) b.scrollIntoView({block:'center', behavior:'smooth'}); }, 30); return; }
   if (act === 'w-demo'){ PREFS.welcomed = true; PREFS.mode = 'demo'; PREFS.role = {owner:'owner', tenant:'t1', pro:'pr3'}[ui.wRole] || 'owner'; savePrefs(); go('home'); toast('Démonstration : vous pourrez changer de rôle avec le bouton en haut à droite.'); return; }
@@ -1335,7 +1693,7 @@ document.addEventListener('click', async ev => {
       toast('Si un compte existe, un e-mail vient de vous être envoyé.'); return {silent:true};
     }); return;
   }
-  if (act === 'logout'){ confirmBox('Se déconnecter ?', 'Vous pourrez vous reconnecter avec votre e-mail et votre mot de passe.', 'Se déconnecter', async () => { await SH.sb.auth.signOut(); resetShared(); SH.status = 'auth'; ui.authMode = 'login'; ui.view = 'home'; render(); return {silent:true}; }); return; }
+  if (act === 'logout'){ confirmBox('Se déconnecter ?', 'Vous pourrez vous reconnecter avec votre e-mail et votre mot de passe.', 'Se déconnecter', async () => { await pushDisable(true); await SH.sb.auth.signOut(); resetShared(); SH.status = 'auth'; ui.authMode = 'login'; ui.view = 'home'; render(); return {silent:true}; }); return; }
   if (act === 'want-code'){ SH.wantCode = true; SH.status = 'link'; render(); return; }
   if (act === 'link-cancel'){ SH.wantCode = false; SH.status = 'ready'; render(); return; }
   if (act === 'welcome-again'){ PREFS.welcomed = false; savePrefs(); ui.wRole = null; go('home'); return; }
@@ -1523,6 +1881,13 @@ document.addEventListener('submit', async ev => {
     else { closeModal(); if (!res || !res.silent) toast('C’est enregistré.'); }
     return;
   }
+  if (form.dataset.form && form.dataset.form.startsWith('link-')){
+    const action = {'link-quote':'quote', 'link-appt':'appt', 'link-done':'done', 'link-msg':'message'}[form.dataset.form];
+    const body = action === 'quote' ? {desc:f.desc, amount:f.amount, visit:!!f.visit} : action === 'appt' ? {date:f.date, slot:f.slot} : action === 'done' ? {report:f.report, extra:!!f.extra} : {text:f.text};
+    const res = await run(() => linkAct(action, body));
+    if (res && res.errors) showErrors(form, res.errors); else toast(action === 'message' ? 'Message envoyé au propriétaire.' : 'C’est envoyé.');
+    return;
+  }
   if (form.dataset.form === 'msg'){
     const d = getD(form.dataset.id);
     if (!d) return;
@@ -1532,7 +1897,7 @@ document.addEventListener('submit', async ev => {
     d.messages.push({id:newId(), ch, by:me().id, text:f.text.trim(), at:Date.now()});
     if (d.messages.length > 300) d.messages = d.messages.slice(-300);
     const res = await run(() => commit(d, null, ch === 'pp' ? ['owner','pro'] : ['owner','tenant'], 'Nouveau message'));
-    if (res && res.errors) showErrors(form, res.errors); else toast('Message envoyé dans le dossier (aucun SMS ni e-mail).');
+    if (res && res.errors) showErrors(form, res.errors); else toast('Message envoyé.');
     return;
   }
   if (form.dataset.form === 'report'){
